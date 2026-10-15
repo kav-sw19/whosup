@@ -1,4 +1,5 @@
 mod cost;
+mod convo;
 mod data;
 mod models;
 #[cfg(test)]
@@ -38,7 +39,7 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
 
 KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details
-      a history: live only → recent → 7 days → all · p group by project
+      a history: live only → recent → 7 days → all · p group by project · v read the conversation
       f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
@@ -58,6 +59,28 @@ impl RowRef {
     /// Headers and dividers can't be selected.
     pub fn is_header(&self) -> bool {
         matches!(self, RowRef::Divider | RowRef::Group(_))
+    }
+}
+
+/// The full-window conversation view (`v`).
+pub struct ConvoView {
+    pub title: String,
+    pub tool: providers::Tool,
+    pub path: PathBuf,
+    sidechain: bool,
+    size: u64,
+    pub items: Vec<convo::Item>,
+    /// lines scrolled up from the bottom (0 = following the latest)
+    pub from_bottom: u16,
+}
+
+impl ConvoView {
+    fn reload_if_changed(&mut self) {
+        let size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+        if size != self.size {
+            self.size = size;
+            self.items = convo::load(&self.path, self.tool, self.sidechain);
+        }
     }
 }
 
@@ -132,6 +155,8 @@ pub struct App {
     base_window_ms: i64,
     /// refresh right after the next draw (so a slow load shows its message first)
     refresh_soon: bool,
+    /// the conversation view, when open
+    pub convo: Option<ConvoView>,
     /// group sessions by project (`p`)
     pub group: bool,
     pub groups: Vec<GroupInfo>,
@@ -260,6 +285,7 @@ impl App {
             demo,
             history: History::Live,
             base_window_ms,
+            convo: None,
             group: false,
             groups: vec![],
             projects: std::collections::HashMap::new(),
@@ -269,6 +295,36 @@ impl App {
         };
         ui::set_light(a.settings.light);
         a
+    }
+
+    /// `v`: open the selected session's (or sub-agent's) whole conversation.
+    pub fn open_convo(&mut self) {
+        let (title, tool, path, sidechain) = match self.selected() {
+            Some(RowRef::Session(i)) => {
+                let s = &self.snap.sessions[*i];
+                (s.title(), s.tool, s.path.clone(), false)
+            }
+            Some(RowRef::Agent(i, j)) => {
+                let a = &self.snap.sessions[*i].agents[*j];
+                let tool = match a.source {
+                    data::AgentSource::Chalking => providers::Tool::Pi,
+                    data::AgentSource::ClaudeTask => providers::Tool::Claude,
+                    data::AgentSource::PiSubagents => return self.flash("This background run has no transcript to show", true),
+                };
+                let Some(p) = a.path.clone() else { return self.flash("No transcript for this agent", true) };
+                (format!("{} · {}", a.id, crate::ui::one_line(&a.task, 60)), tool, p, true)
+            }
+            _ => return self.flash("Select a session or agent to read its conversation", true),
+        };
+        if path.as_os_str().is_empty() || !path.exists() {
+            return self.flash("No transcript for this session", true);
+        }
+        let mut v = ConvoView { title, tool, path, sidechain, size: u64::MAX, items: vec![], from_bottom: 0 };
+        v.reload_if_changed();
+        if v.items.is_empty() {
+            return self.flash("Nothing in this conversation yet", true);
+        }
+        self.convo = Some(v);
     }
 
     /// The git repository a folder belongs to (its folder), else the folder itself.
@@ -429,6 +485,9 @@ impl App {
     }
 
     fn refresh(&mut self) {
+        if let Some(v) = self.convo.as_mut() {
+            v.reload_if_changed();
+        }
         if self.demo {
             self.snap = demo::snapshot();
             self.rebuild_rows();
@@ -779,6 +838,21 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                 if k.kind != KeyEventKind::Press {
                     continue;
                 }
+                // the conversation view takes the keys while it's open
+                if let Some(v) = app.convo.as_mut() {
+                    match k.code {
+                        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                        KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('q') => app.convo = None,
+                        KeyCode::Up | KeyCode::Char('k') => v.from_bottom = v.from_bottom.saturating_add(1),
+                        KeyCode::Down | KeyCode::Char('j') => v.from_bottom = v.from_bottom.saturating_sub(1),
+                        KeyCode::PageUp | KeyCode::Char('K') => v.from_bottom = v.from_bottom.saturating_add(15),
+                        KeyCode::PageDown | KeyCode::Char('J') => v.from_bottom = v.from_bottom.saturating_sub(15),
+                        KeyCode::Char('g') | KeyCode::Home => v.from_bottom = u16::MAX,
+                        KeyCode::Char('G') | KeyCode::End => v.from_bottom = 0,
+                        _ => {}
+                    }
+                    continue;
+                }
                 // typing into the search box
                 if app.searching {
                     match k.code {
@@ -825,6 +899,7 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     KeyCode::Char('1') => app.set_view(View::Sessions),
                     KeyCode::Char('2') => app.set_view(View::Terminals),
                     KeyCode::Char('a') => app.cycle_history(),
+                    KeyCode::Char('v') if app.view == View::Sessions => app.open_convo(),
                     KeyCode::Char('p') if app.view == View::Sessions => {
                         app.group = !app.group;
                         app.rebuild_rows();
@@ -994,6 +1069,9 @@ mod render_test {
         if env("WHOSUP_GROUP").is_some() {
             app.group = true;
             app.rebuild_rows();
+        }
+        if env("WHOSUP_CONVO").is_some() {
+            app.open_convo();
         }
         if let Some(q) = env("WHOSUP_QUERY") {
             app.query = q;

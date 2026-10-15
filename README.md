@@ -111,6 +111,7 @@ whosup --resume "auth"      # resume the closed session whose title matches "aut
 | `↵` | Live session or terminal: bring its tab to the front. Closed session: resume it |
 | `s` | On a terminal: show the agent session running in it |
 | `J` `K` | Scroll the details pane |
+| `v` | Read the whole conversation of the selected session or sub-agent (`v` / `esc` closes) |
 | `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
 | `f` | Hide finished sub-agents |
 | `p` | Group sessions by project (their git repository, else their folder) |

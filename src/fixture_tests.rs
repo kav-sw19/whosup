@@ -304,3 +304,46 @@ fn two_live_sessions_editing_one_file() {
     assert_eq!(snap.sessions[live[1]].shared_files.len(), 1);
     assert!(snap.sessions[closed].shared_files.is_empty(), "closed sessions don't count");
 }
+
+#[test]
+fn conversations() {
+    use crate::convo::{load, Entry};
+    let entries = |rel: &str, tool: Tool, side: bool| -> Vec<Entry> {
+        load(&fixtures().join(rel), tool, side).into_iter().map(|i| i.entry).collect()
+    };
+    let pi = entries(
+        "pi/sessions/--Users-you-code-api--/2026-10-15T09-00-00-000Z_01a1aaaa-0000-7000-8000-000000000001.jsonl",
+        Tool::Pi,
+        false,
+    );
+    assert_eq!(
+        pi,
+        vec![
+            Entry::User("add rate limits to /v1".into()),
+            Entry::Call("read".into(), "src/router.rs".into()),
+            Entry::Result("fn router() {}".into(), false),
+            Entry::Call("edit".into(), "src/router.rs".into()),
+            Entry::Result("ok".into(), false),
+            Entry::Reply("Rate limiting is in place on /v1.".into()),
+        ]
+    );
+    let claude = entries("claude/projects/-Users-you-code-web/2af7ac15-0000-4000-8000-000000000002.jsonl", Tool::Claude, false);
+    assert_eq!(claude.first(), Some(&Entry::User("fix the login redirect".into())));
+    assert!(claude.contains(&Entry::Call("Edit".into(), "/Users/you/code/web/src/login.ts".into())));
+    assert!(!claude.iter().any(|e| matches!(e, Entry::User(t) if t.contains("sidechain"))), "sub-agent lines stay out");
+    assert_eq!(claude.last(), Some(&Entry::Reply("Fixed: the redirect now keeps the return path.".into())));
+    let codex = entries(
+        "codex/sessions/2026/10/15/rollout-2026-10-15T12-00-00-01a1cccc-0000-7000-8000-000000000004.jsonl",
+        Tool::Codex,
+        false,
+    );
+    assert_eq!(
+        codex,
+        vec![
+            Entry::User("why does checkout.spec.ts flake?".into()),
+            Entry::Call("exec_command".into(), "npm test".into()),
+            Entry::Result("1 failed".into(), false),
+            Entry::Reply("It races the payment webhook.".into()),
+        ]
+    );
+}

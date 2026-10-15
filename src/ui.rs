@@ -418,12 +418,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(body)
     };
-    if app.view == View::Terminals {
-        draw_terminal_list(f, app, list_area);
+    if app.convo.is_some() {
+        draw_convo(f, app, body);
     } else {
-        draw_list(f, app, list_area);
+        if app.view == View::Terminals {
+            draw_terminal_list(f, app, list_area);
+        } else {
+            draw_list(f, app, list_area);
+        }
+        draw_detail(f, app, detail_area);
     }
-    draw_detail(f, app, detail_area);
     draw_footer(f, app, footer);
 }
 
@@ -567,7 +571,89 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// The whole conversation, newest at the bottom.
+fn draw_convo(f: &mut Frame, app: &mut App, area: Rect) {
+    use crate::convo::Entry;
+    let p = pal();
+    let Some(v) = app.convo.as_mut() else { return };
+    let who = v.tool.label();
+    let mut lines: Vec<Line> = Vec::new();
+    let mut last_kind = "";
+    for item in &v.items {
+        let when = item.at.map(|t| format!("  {} ago", ago(Some(t)))).unwrap_or_default();
+        match &item.entry {
+            Entry::User(t) => {
+                lines.push(Line::default());
+                lines.push(Line::from(vec![
+                    Span::styled("you", Style::new().fg(p.violet).bold()),
+                    Span::styled(when, Style::new().fg(p.faint)),
+                ]));
+                lines.extend(markdown(t, 60));
+                last_kind = "user";
+            }
+            Entry::Reply(t) => {
+                if last_kind != "reply" {
+                    lines.push(Line::default());
+                    lines.push(Line::from(vec![
+                        Span::styled(who.to_string(), Style::new().fg(tool_color(v.tool)).bold()),
+                        Span::styled(when, Style::new().fg(p.faint)),
+                    ]));
+                }
+                lines.extend(markdown(t, 400));
+                last_kind = "reply";
+            }
+            Entry::Call(name, arg) => {
+                lines.push(Line::from(vec![
+                    Span::styled("  ⚙ ", Style::new().fg(p.amber)),
+                    Span::styled(name.clone(), Style::new().fg(p.soft).bold()),
+                    Span::styled(format!("  {arg}"), Style::new().fg(p.muted)),
+                ]));
+                last_kind = "tool";
+            }
+            Entry::Result(out, err) => {
+                for (i, l) in out.lines().enumerate() {
+                    lines.push(Line::from(vec![
+                        Span::styled(if i == 0 { "    ↳ " } else { "      " }, Style::new().fg(p.faint)),
+                        Span::styled(l.to_string(), Style::new().fg(if *err { p.red } else { p.faint })),
+                    ]));
+                }
+                last_kind = "tool";
+            }
+        }
+    }
+    // scroll: measured in wrapped lines, kept within the content
+    let inner_w = area.width.saturating_sub(4).max(1) as usize;
+    let total: usize = lines.iter().map(|l| l.width().max(1).div_ceil(inner_w)).sum();
+    let visible = area.height.saturating_sub(2) as usize;
+    let max = total.saturating_sub(visible);
+    v.from_bottom = v.from_bottom.min(max as u16);
+    let offset = (max - v.from_bottom as usize) as u16;
+    let pos = if max == 0 { "all".to_string() } else { format!("{}%", offset as usize * 100 / max) };
+    let title = title_line(
+        "Conversation",
+        Some(Span::styled(format!("{} · {}", who, one_line(&v.title, 60)), Style::new().fg(p.muted))),
+    );
+    let block = panel(title, true)
+        .padding(Padding::new(1, 1, 0, 0))
+        .title_bottom(Line::from(Span::styled(format!(" {} entries · {pos} ", v.items.len()), Style::new().fg(p.muted))).alignment(Alignment::Right));
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((offset, 0)).block(block), area);
+}
+
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if app.convo.is_some() {
+        let p = pal();
+        let keys = [("↑↓", "scroll"), ("PgUp PgDn", "page"), ("g G", "top / latest"), ("v esc", "close")];
+        let mut spans = vec![Span::raw(" ")];
+        for (i, (k, v)) in keys.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled("  ·  ", Style::new().fg(p.faint)));
+            }
+            spans.push(Span::styled(*k, Style::new().fg(p.soft).bold()));
+            spans.push(Span::styled(format!(" {v}"), Style::new().fg(p.muted)));
+        }
+        f.render_widget(Line::from(spans), area);
+        return;
+    }
     // the search box takes the footer while you type
     if app.searching {
         let p = pal();
@@ -618,6 +704,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("a", history_label.as_str(), Some(app.show_recent), 3),
             ("f", "hide finished", Some(app.hide_finished), 4),
             ("p", "by project", Some(app.group), 5),
+            ("v", "conversation", None, 4),
             ("n", "notify", Some(app.settings.notify), 4),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),
