@@ -172,11 +172,16 @@ for you to **approve a tool call** (shown as `approve Bash?`).
 Claude Code and Codex don't record approval prompts in their transcripts, so whosup infers them:
 the session's last entry is a tool request, nothing has been written for a few seconds, no
 command has started for it, and the agent is idle. (Codex approval events are used directly when
-present.) These sessions sort to the top of the list, their status is bold,
+present.)
+
+It also flags sessions that look **stuck**: one step (a tool or the model thinking) running with
+nothing written for 10 minutes (`stuck_minutes=` in the config), shown as `stuck? bash 14m`; or
+the same tool call with the same arguments made three or more times in a row, shown as
+`looping? Read ×4`. These sessions sort to the top of the list, their status is bold,
 and the header counts them.
 
 With notifications on (`n`), whosup sends a macOS notification when a session goes from working
-to waiting for you, waiting for approval, or an error. They appear under Script Editor, the app macOS uses for
+to waiting for you, waiting for approval, an error, or looking stuck. They appear under Script Editor, the app macOS uses for
 `osascript` notifications, so allow notifications for it in System Settings if none show up.
 Settings live in `~/.config/whosup/config`.
 
@@ -191,6 +196,7 @@ refresh=1000          # milliseconds between refreshes (at least 250)
 hide=aider,opencode   # agents to leave out
 terminal=iTerm        # where to resume and start sessions (Ghostty, Terminal, iTerm, tmux)
 recent_hours=48       # how far back recent sessions go (--recent overrides it)
+stuck_minutes=10      # one step running this long counts as stuck
 price.opus=15,75,1.5,18.75   # USD per million tokens: input, output, cache read, cache write
 ```
 

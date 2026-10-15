@@ -253,6 +253,9 @@ fn session_status(s: &Session) -> Status {
         let tool = s.t.last_tool.clone().unwrap_or_else(|| "tool".into());
         return Status { glyph: "◆".into(), label: format!("approve {tool}?"), color: pal().orange };
     }
+    if let Some(why) = s.stuck() {
+        return Status { glyph: "▲".into(), label: why, color: pal().red };
+    }
     if s.t.is_busy() {
         let label = match (s.t.last_role.as_deref(), s.t.last_stop.as_deref()) {
             (Some("assistant"), Some("toolUse")) => s.t.last_tool.clone().unwrap_or_else(|| "tool".into()),

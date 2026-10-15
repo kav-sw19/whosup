@@ -135,6 +135,11 @@ pub struct Transcript {
     pub context_window: Option<u64>,
     /// the agent recorded an approval request that hasn't been answered (Codex)
     pub approval_requested: bool,
+    /// the last tool call (name + arguments) and how many times in a row it was made
+    pub(crate) last_call: Option<String>,
+    pub call_repeats: u32,
+    /// every tool call's (name, arguments), newest last, for files-touched and friends
+    pub(crate) last_call_args: Option<String>,
     /// this file is itself a sub-agent transcript (keep sidechain lines)
     pub(crate) sidechain_file: bool,
 }
@@ -230,13 +235,16 @@ impl Transcript {
                             self.context_tokens = tot;
                         }
                         if let Some(parts) = m.get("content").and_then(Value::as_array) {
-                            let tools: Vec<String> = parts
-                                .iter()
-                                .filter(|p| p.get("type").and_then(Value::as_str) == Some("toolCall"))
-                                .filter_map(|p| p.get("name").and_then(Value::as_str).map(Into::into))
-                                .collect();
+                            let calls: Vec<&Value> =
+                                parts.iter().filter(|p| p.get("type").and_then(Value::as_str) == Some("toolCall")).collect();
+                            let tools: Vec<String> =
+                                calls.iter().filter_map(|p| p.get("name").and_then(Value::as_str).map(Into::into)).collect();
                             self.tool_calls += tools.len() as u64;
                             self.last_tool = if tools.is_empty() { None } else { Some(tools.join(", ")) };
+                            for c in calls {
+                                let name = c.get("name").and_then(Value::as_str).unwrap_or("tool");
+                                self.note_call(name, c.get("arguments").unwrap_or(&Value::Null));
+                            }
                         }
                         if let Some(t) = m.get("content").and_then(text_of) {
                             if !t.trim().is_empty() {
@@ -250,6 +258,22 @@ impl Transcript {
             _ => {}
         }
     }
+
+    /// Record a tool call, counting identical calls in a row (a loop).
+    pub(crate) fn note_call(&mut self, name: &str, args: &Value) {
+        let sig = format!("{name}|{args}");
+        if self.last_call.as_deref() == Some(sig.as_str()) {
+            self.call_repeats += 1;
+        } else {
+            self.call_repeats = 1;
+            self.last_call = Some(sig);
+        }
+        self.last_call_args = Some(args.to_string());
+        self.note_files(name, args);
+    }
+
+    /// Files a tool call writes (filled in by the files-touched feature).
+    pub(crate) fn note_files(&mut self, _name: &str, _args: &Value) {}
 
     /// Short description of what the transcript is doing right now.
     pub fn activity(&self) -> String {
@@ -417,13 +441,21 @@ impl Session {
                 .unwrap_or_else(|| "(new session)".into())
         })
     }
-    /// Live and waiting on you: finished its turn, hit an error, or wants a tool call approved.
+    /// Live and waiting on you: finished its turn, hit an error, wants a tool call approved, or
+    /// looks stuck.
     pub fn needs_you(&self) -> bool {
         self.awaiting_approval
+            || self.stuck().is_some()
             || self.live()
             && !self.t.is_busy()
             && self.t.last_role.as_deref() == Some("assistant")
             && matches!(self.t.last_stop.as_deref(), Some("stop") | Some("error"))
+    }
+
+    /// Why a live session looks stuck, if it does: one step running far too long, or the same
+    /// tool call repeated.
+    pub fn stuck(&self) -> Option<String> {
+        stuck_reason(&self.t, self.live() && !self.awaiting_approval, now_ms(), stuck_after_ms())
     }
 
     /// Share of the context window in use (0.0–1.0+), when the window is known.
@@ -492,6 +524,38 @@ fn mtime_ms(p: &Path) -> i64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+static STUCK_AFTER_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(10 * 60_000);
+
+/// How long one step may run before a session counts as stuck (`stuck_minutes=` in the config).
+pub fn set_stuck_after_minutes(m: f64) {
+    STUCK_AFTER_MS.store((m * 60_000.0) as i64, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn stuck_after_ms() -> i64 {
+    STUCK_AFTER_MS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn stuck_reason(t: &Transcript, live: bool, now: i64, after_ms: i64) -> Option<String> {
+    if !live || !t.is_busy() {
+        return None;
+    }
+    if t.call_repeats >= 3 && t.last_stop.as_deref() == Some("toolUse") || t.call_repeats >= 4 {
+        let tool = t.last_call.as_deref().and_then(|c| c.split('|').next()).unwrap_or("tool");
+        return Some(format!("looping? {tool} ×{}", t.call_repeats));
+    }
+    let quiet = now - t.last_ts?;
+    if quiet >= after_ms {
+        let what = match t.last_stop.as_deref() {
+            Some("toolUse") => t.last_tool.clone().unwrap_or_else(|| "tool".into()),
+            _ => "thinking".into(),
+        };
+        let m = quiet / 60_000;
+        let dur = if m >= 60 { format!("{}h{}m", m / 60, m % 60) } else { format!("{m}m") };
+        return Some(format!("stuck? {what} {dur}"));
+    }
+    None
 }
 
 /// What whosup can see about a live Claude Code or Codex session's last tool request.

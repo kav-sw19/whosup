@@ -194,6 +194,7 @@ impl Transcript {
                         Some("tool_use") => {
                             self.tool_calls += 1;
                             let name = s(p, "/name").unwrap_or("tool").to_string();
+                            self.note_call(&name, p.get("input").unwrap_or(&Value::Null));
                             self.last_tool = Some(match self.last_tool.take() {
                                 Some(prev) if !prev.split(", ").any(|x| x == name) => format!("{prev}, {name}"),
                                 Some(prev) => prev,
@@ -331,6 +332,8 @@ impl Transcript {
                     "function_call" | "custom_tool_call" | "local_shell_call" | "web_search_call" => {
                         self.tool_calls += 1;
                         let name = s(p, "/name").unwrap_or_else(|| s(p, "/type").unwrap_or("tool"));
+                        let args = p.get("arguments").or(p.get("input")).or(p.get("action")).cloned().unwrap_or(Value::Null);
+                        self.note_call(name, &args);
                         self.last_tool = Some(name.trim_end_matches("_call").into());
                         self.last_role = Some("assistant".into());
                         self.last_stop = Some("toolUse".into());

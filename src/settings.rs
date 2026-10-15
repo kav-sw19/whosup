@@ -6,6 +6,7 @@
 //!   - `hide=aider,opencode`: agents to leave out
 //!   - `terminal=Ghostty|Terminal|iTerm|tmux`: where to resume or start sessions by default
 //!   - `recent_hours=24`: how far back "recent" reaches (`--recent` overrides it)
+//!   - `stuck_minutes=10`: one step running longer than this counts as stuck
 //!   - `price.<model>=in,out[,cache_read,cache_write]`: USD per million tokens for cost
 //!     estimates, matched against the model name (`price.opus=15,75,1.5,18.75`)
 //! - `hosts.json`: the app each session last ran in (`{"<transcript path>": "Ghostty"}`), so a
@@ -37,13 +38,14 @@ pub struct Settings {
     pub hide: Vec<String>,
     pub terminal: Option<String>,
     pub recent_hours: f64,
+    pub stuck_minutes: f64,
     /// (model-name fragment, price), in file order; the first match wins
     pub prices: Vec<(String, Price)>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { light: false, notify: false, refresh_ms: 1000, hide: vec![], terminal: None, recent_hours: 24.0, prices: vec![] }
+        Settings { light: false, notify: false, refresh_ms: 1000, hide: vec![], terminal: None, recent_hours: 24.0, stuck_minutes: 10.0, prices: vec![] }
     }
 }
 
@@ -71,6 +73,7 @@ impl Settings {
                 "hide" => s.hide = v.split(',').map(|x| x.trim().to_lowercase()).filter(|x| !x.is_empty()).collect(),
                 "terminal" if !v.is_empty() => s.terminal = Some(v.to_string()),
                 "recent_hours" => s.recent_hours = v.parse::<f64>().ok().filter(|h| *h > 0.0).unwrap_or(s.recent_hours),
+                "stuck_minutes" => s.stuck_minutes = v.parse::<f64>().ok().filter(|m| *m > 0.0).unwrap_or(s.stuck_minutes),
                 k if k.starts_with("price.") => {
                     let n: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
                     if n.len() >= 2 {

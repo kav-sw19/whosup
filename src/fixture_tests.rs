@@ -217,3 +217,40 @@ fn codex_approval_events() {
     assert!(!cache.get(&f, Tool::Codex, false).unwrap().approval_requested, "answered");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn stuck_and_looping() {
+    use crate::data::{stuck_reason, Transcript};
+    let now = 10_000_000;
+    let busy = |stop: Option<&str>, quiet_ms: i64| Transcript {
+        last_role: Some(if stop.is_some() { "assistant" } else { "toolResult" }.into()),
+        last_stop: stop.map(Into::into),
+        last_tool: Some("bash".into()),
+        last_ts: Some(now - quiet_ms),
+        ..Transcript::default()
+    };
+    // a tool running for 14 minutes
+    assert_eq!(stuck_reason(&busy(Some("toolUse"), 14 * 60_000), true, now, 10 * 60_000).as_deref(), Some("stuck? bash 14m"));
+    // thinking for 11 minutes
+    assert_eq!(stuck_reason(&busy(None, 11 * 60_000), true, now, 10 * 60_000).as_deref(), Some("stuck? thinking 11m"));
+    // not yet, not when idle, not when closed
+    assert!(stuck_reason(&busy(Some("toolUse"), 60_000), true, now, 10 * 60_000).is_none());
+    assert!(stuck_reason(&busy(Some("toolUse"), 60 * 60_000), false, now, 10 * 60_000).is_none());
+    let mut idle = busy(Some("stop"), 60 * 60_000);
+    idle.last_role = Some("assistant".into());
+    assert!(stuck_reason(&idle, true, now, 10 * 60_000).is_none());
+
+    // the same call three times in a row, from a real transcript format
+    let dir = std::env::temp_dir().join(format!("whosup-loop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("loop.jsonl");
+    let call = |i: u32| format!(
+        "{{\"type\":\"assistant\",\"message\":{{\"model\":\"claude-opus-4-8\",\"id\":\"m{i}\",\"role\":\"assistant\",\"content\":[{{\"type\":\"tool_use\",\"id\":\"t{i}\",\"name\":\"Read\",\"input\":{{\"file_path\":\"/x/a.rs\"}}}}],\"stop_reason\":\"tool_use\"}},\"timestamp\":\"2026-10-15T10:00:0{i}.000Z\",\"cwd\":\"/x\",\"sessionId\":\"s\"}}\n\
+         {{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":[{{\"type\":\"tool_result\",\"tool_use_id\":\"t{i}\",\"content\":\"x\"}}]}},\"timestamp\":\"2026-10-15T10:00:0{i}.500Z\",\"cwd\":\"/x\",\"sessionId\":\"s\"}}\n"
+    );
+    std::fs::write(&f, (1..=4).map(call).collect::<String>()).unwrap();
+    let t = TranscriptCache::default().get(&f, Tool::Claude, false).unwrap();
+    assert_eq!(t.call_repeats, 4);
+    assert_eq!(stuck_reason(&t, true, crate::data::now_ms(), 10 * 60_000).as_deref(), Some("looping? Read ×4"));
+    std::fs::remove_dir_all(&dir).ok();
+}

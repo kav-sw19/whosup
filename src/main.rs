@@ -71,6 +71,7 @@ enum Phase {
     NeedsYou,
     Error,
     Approval,
+    Stuck,
     Other,
 }
 
@@ -252,6 +253,8 @@ impl App {
         let phase = |s: &Session| {
             if s.awaiting_approval {
                 Phase::Approval
+            } else if s.stuck().is_some() {
+                Phase::Stuck
             } else if s.t.is_busy() {
                 Phase::Busy
             } else if s.needs_you() && s.t.last_stop.as_deref() == Some("error") {
@@ -279,6 +282,11 @@ impl App {
                         &s.title(),
                     ),
                     Phase::NeedsYou => notify("Waiting for you", &subtitle, &s.title()),
+                    Phase::Stuck => notify(
+                        &format!("Looks stuck: {}", s.stuck().unwrap_or_default().trim_start_matches(|c| c != ' ').trim()),
+                        &subtitle,
+                        &s.title(),
+                    ),
                     Phase::Error => notify("Stopped with an error", &subtitle, &s.title()),
                     _ => {}
                 }
@@ -622,6 +630,7 @@ fn main() -> std::io::Result<()> {
         resume::set_default_terminal(t);
     }
     cost::set_prices(config.prices.clone());
+    data::set_stuck_after_minutes(config.stuck_minutes);
     let mut hours: f64 = config.recent_hours;
     let mut once = false;
     let mut all = false;
