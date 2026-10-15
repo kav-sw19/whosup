@@ -2,6 +2,7 @@
 
 use crate::data::{now_ms, Agent, AgentSource, Session};
 use crate::providers::Tool;
+use crate::ports::Port;
 use crate::terms::Terminal;
 use crate::usage::Group;
 use crate::{App, RowRef, View};
@@ -431,6 +432,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         if app.view == View::Terminals {
             draw_terminal_list(f, app, list_area);
+        } else if app.view == View::Ports {
+            draw_port_list(f, app, list_area);
         } else {
             draw_list(f, app, list_area);
         }
@@ -484,10 +487,29 @@ fn header_parts(app: &App) -> HeaderParts {
     tabs.push(Span::raw(" "));
     tabs.extend(tab("Terminals", Some(terms.len()), "2", app.view == View::Terminals));
     tabs.push(Span::raw(" "));
-    tabs.extend(tab("Usage", None, "3", app.view == View::Usage));
+    tabs.extend(tab("Ports", Some(app.snap.ports.len()), "3", app.view == View::Ports));
+    tabs.push(Span::raw(" "));
+    tabs.extend(tab("Usage", None, "4", app.view == View::Usage));
 
     let mut stats = Vec::new();
-    let right: Vec<Span> = if app.view != View::Terminals {
+    let right: Vec<Span> = if app.view == View::Ports {
+        let ports = &app.snap.ports;
+        let by_agents = ports.iter().filter(|p| p.session.is_some()).count();
+        let from_terms = ports.iter().filter(|p| p.session.is_none() && p.tty.is_some()).count();
+        let exposed = ports.iter().filter(|p| p.yours() && p.exposed()).count();
+        let detached = ports.iter().filter(|p| p.detached()).count();
+        stats.extend(stat(by_agents, "from agents", p.violet, "◆"));
+        stats.push(sep());
+        stats.extend(stat(from_terms, "from terminals", p.blue, "▶"));
+        stats.push(sep());
+        stats.extend(stat(detached, "detached", p.amber, "▷"));
+        stats.push(sep());
+        stats.extend(stat(exposed, "open to your network", p.amber, "▲"));
+        vec![
+            Span::styled(ports.len().to_string(), Style::new().fg(p.fg).bold()),
+            Span::styled(" listening", Style::new().fg(p.muted)),
+        ]
+    } else if app.view != View::Terminals {
         let needs = sessions.iter().filter(|s| s.needs_you()).count();
         stats.extend(stat(needs, if needs == 1 { "needs you" } else { "need you" }, p.green, "●"));
         stats.push(sep());
@@ -829,6 +851,21 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Line::from(spans), area);
         return;
     }
+    if let Some((pid, port, name)) = &app.closing {
+        let p = pal();
+        let spans = vec![
+            Span::styled(" close ", Style::new().fg(p.on_accent).bg(p.red).bold()),
+            Span::styled(format!("  port {port}: end {} (pid {pid})?   ", one_line(name, 30)), Style::new().fg(p.fg)),
+            Span::styled("k", Style::new().fg(p.red).bold()),
+            Span::styled(" end it  ·  ", Style::new().fg(p.muted)),
+            Span::styled("9", Style::new().fg(p.red).bold()),
+            Span::styled(" force kill  ·  ", Style::new().fg(p.muted)),
+            Span::styled("any other key", Style::new().fg(p.soft).bold()),
+            Span::styled(" cancel", Style::new().fg(p.muted)),
+        ];
+        f.render_widget(Line::from(spans), area);
+        return;
+    }
     if app.copying {
         let p = pal();
         let mut spans = vec![Span::styled(" copy ", Style::new().fg(p.on_accent).bg(p.blue).bold()), Span::raw("  ")];
@@ -862,7 +899,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     // the search box takes the footer while you type
     if app.searching {
         let p = pal();
-        let matches = app.rows.iter().filter(|(_, r)| matches!(r, RowRef::Session(_) | RowRef::Terminal(_))).count();
+        let matches = app.rows.iter().filter(|(_, r)| matches!(r, RowRef::Session(_) | RowRef::Terminal(_) | RowRef::Port(_))).count();
         f.render_widget(
             Line::from(vec![
                 Span::styled(" / ", Style::new().fg(p.on_accent).bg(p.blue).bold()),
@@ -921,6 +958,18 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         View::Usage => vec![
             ("tab", "sessions", None, 1),
             ("a", if app.usage_days == 7 { "7 days" } else if app.usage_days == 30 { "30 days" } else { "90 days" }, Some(true), 1),
+            ("t", "theme", None, 5),
+            ("q", "quit", None, 0),
+        ],
+        View::Ports => vec![
+            ("↵", "go to its tab", None, 0),
+            ("o", "open in browser", None, 1),
+            ("x", "close port", None, 1),
+            ("/", "search", None, 2),
+            ("tab", "usage", None, 3),
+            ("↑↓", "move", None, 2),
+            ("s", "show session", None, 3),
+            ("J K", "scroll", None, 7),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),
         ],
@@ -1104,7 +1153,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from(""),
                 ]));
             }
-            RowRef::Terminal(_) | RowRef::Job(..) => {}
+            RowRef::Terminal(_) | RowRef::Job(..) | RowRef::Port(_) => {}
             RowRef::Orphan(k) => {
                 let p = &app.snap.orphan_procs[*k];
                 let supported = !matches!(p.tool, Tool::Other(_));
@@ -1548,6 +1597,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             };
             lines.push(Line::from(Span::styled(note, Style::new().fg(pal().muted))));
         }
+        Some(RowRef::Port(i)) => {
+            title = title_line("Port", None);
+            port_detail(&app.snap.ports[i], app, &mut lines);
+        }
         Some(RowRef::Terminal(i)) => {
             title = title_line("Terminal", None);
             terminal_detail(&app.snap.terminals[i], &mut lines);
@@ -1827,5 +1880,205 @@ fn terminal_detail(t: &Terminal, lines: &mut Vec<Line<'static>>) {
                 Span::styled(p.cmdline.clone(), Style::new().fg(pal().soft)),
             ]));
         }
+    }
+}
+
+// ── ports ─────────────────────────────────────────────────────────────────────
+fn port_state(p: &Port) -> TermState {
+    match &p.session {
+        Some(l) => TermState { glyph: "◆", color: tool_color(l.tool) },
+        None if p.tty.is_some() => TermState { glyph: "▶", color: pal().blue },
+        None if p.detached() => TermState { glyph: "▷", color: pal().amber },
+        None => TermState { glyph: "○", color: pal().faint },
+    }
+}
+
+/// "network" when other machines can reach it, else "local".
+fn access_span(p: &Port) -> Span<'static> {
+    if p.exposed() {
+        Span::styled("network", Style::new().fg(if p.yours() { pal().amber } else { pal().muted }))
+    } else {
+        Span::styled("local", Style::new().fg(pal().faint))
+    }
+}
+
+fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let ports = &app.snap.ports;
+    let where_w = ports
+        .iter()
+        .filter(|p| p.yours())
+        .map(|p| short_path(&p.proc.cwd, 22).chars().count())
+        .max()
+        .unwrap_or(5)
+        .clamp(5, 22);
+    let right = |s: String, st: Style| Cell::from(Line::from(Span::styled(s, st)).alignment(Alignment::Right));
+    // glyph, port, process, from, where, access, up
+    let w = area.width;
+    let keep = [true, true, true, w >= 80, w >= 120, w >= 64, true];
+    let fit = move |v: Vec<Cell<'static>>| Row::new(v.into_iter().zip(keep).filter(|(_, k)| *k).map(|(c, _)| c));
+    let mut rows = Vec::new();
+    for (_, r) in app.rows.iter() {
+        match r {
+            RowRef::Port(i) => {
+                let p = &ports[*i];
+                let st = port_state(p);
+                let yours = p.yours();
+                let from: Line = match (&p.session, &p.tty) {
+                    (Some(l), _) => Line::from(vec![tool_tag(l.tool, true), Span::styled(one_line(&l.title, 20), Style::new().fg(pal().soft))]),
+                    (None, Some(tty)) => {
+                        let app_name = app.snap.terminals.iter().find(|t| &t.tty == tty).map(|t| short_app(&t.app)).unwrap_or_default();
+                        Line::from(vec![
+                            Span::styled(tty.trim_start_matches("tty").to_string(), Style::new().fg(pal().soft).bold()),
+                            Span::styled(format!(" {app_name}"), Style::new().fg(pal().muted)),
+                        ])
+                    }
+                    (None, None) if p.detached() => Line::from(vec![
+                        Span::styled("detached ", Style::new().fg(pal().amber)),
+                        Span::styled(short_path(&p.proc.cwd, 18), Style::new().fg(pal().muted)),
+                    ]),
+                    (None, None) => Line::from(Span::styled("app", Style::new().fg(pal().faint))),
+                };
+                rows.push(fit(vec![
+                    Cell::from(Span::styled(st.glyph, Style::new().fg(st.color).bold())),
+                    right(format!(":{}", p.port), Style::new().fg(if yours { pal().fg } else { pal().muted }).bold()),
+                    Cell::from(Span::styled(
+                        one_line(&p.proc.cmdline, 80),
+                        if yours { Style::new().fg(pal().fg) } else { Style::new().fg(pal().muted) },
+                    )),
+                    Cell::from(from),
+                    Cell::from(Span::styled(
+                        if yours { short_path(&p.proc.cwd, where_w) } else { String::new() },
+                        Style::new().fg(pal().muted),
+                    )),
+                    Cell::from(access_span(p)),
+                    right(ago(Some(p.proc.start_ms).filter(|&t| t > 0)), Style::new().fg(pal().muted)),
+                ]));
+            }
+            RowRef::Divider => {
+                rows.push(fit(vec![
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(Span::styled("other apps", Style::new().fg(pal().faint).add_modifier(Modifier::BOLD))),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                ]));
+            }
+            _ => {}
+        }
+    }
+    let head = |s: &'static str| Cell::from(Span::styled(s, Style::new().fg(pal().faint).add_modifier(Modifier::BOLD)));
+    let head_r = |s: &'static str| {
+        Cell::from(Line::from(Span::styled(s, Style::new().fg(pal().faint).add_modifier(Modifier::BOLD))).alignment(Alignment::Right))
+    };
+    let widths: Vec<Constraint> = [
+        Constraint::Length(1),
+        Constraint::Length(6),
+        Constraint::Fill(1),
+        Constraint::Length(27),
+        Constraint::Length(where_w as u16),
+        Constraint::Length(7),
+        Constraint::Length(7),
+    ]
+    .into_iter()
+    .zip(keep)
+    .filter(|(_, k)| *k)
+    .map(|(c, _)| c)
+    .collect();
+    let header = fit(vec![head(""), head_r("PORT"), head("PROCESS"), head("STARTED FROM"), head("WHERE"), head("OPEN TO"), head_r("UP")]);
+    let n = ports.len();
+    let yours = ports.iter().filter(|p| p.yours()).count();
+    let count = Span::styled(format!("{n} listening · {yours} yours"), Style::new().fg(pal().muted));
+    let table = Table::new(rows, widths)
+        .column_spacing(2)
+        .header(header.bottom_margin(1))
+        .row_highlight_style(Style::new().bg(pal().select))
+        .highlight_symbol(Span::styled("▌", Style::new().fg(pal().blue)))
+        .highlight_spacing(ratatui::widgets::HighlightSpacing::Always)
+        .block(panel(title_line("Ports", Some(count)), true).padding(Padding::new(0, 1, 1, 0)));
+    f.render_stateful_widget(table, area, &mut app.state);
+
+    if n == 0 {
+        let inner = area.inner(Margin { horizontal: 2, vertical: 3 });
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled("Nothing is listening", Style::new().fg(pal().soft).bold())),
+                Line::from(Span::styled("Dev servers your agents start will show up here", Style::new().fg(pal().muted))),
+            ])
+            .alignment(Alignment::Center),
+            inner,
+        );
+    }
+}
+
+fn port_detail(p: &Port, app: &App, lines: &mut Vec<Line<'static>>) {
+    let pl = pal();
+    lines.push(Line::from(vec![
+        Span::styled(format!(":{}", p.port), Style::new().fg(pl.fg).bold()),
+        Span::styled(format!("  {}", p.proc.name), Style::new().fg(pl.soft).bold()),
+    ]));
+    let st = port_state(p);
+    let state = Status {
+        glyph: st.glyph.into(),
+        label: "listening".into(),
+        color: st.color,
+    };
+    let up = Some(p.proc.start_ms).filter(|&t| t > 0).map(|t| format!("for {}", ago(Some(t)))).unwrap_or_default();
+    lines.push(status_line(&state, vec![format!("pid {}", p.proc.pid), up]));
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled(" o ", Style::new().fg(pl.on_accent).bg(pl.green).bold()),
+        Span::styled(format!(" open {}", p.url()), Style::new().fg(pl.fg).bold()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" x ", Style::new().fg(pl.on_accent).bg(pl.red).bold()),
+        Span::styled(" close the port", Style::new().fg(pl.fg).bold()),
+        Span::styled(format!("  (ends {})", p.proc.name), Style::new().fg(pl.muted)),
+    ]));
+    lines.push(Line::default());
+    lines.push(section("Open to"));
+    if p.exposed() {
+        lines.push(Line::from(vec![
+            Span::styled("▲ your network  ", Style::new().fg(pl.amber).bold()),
+            Span::styled("other machines can connect", Style::new().fg(pl.muted)),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("this Mac only  ", Style::new().fg(pl.green).bold()),
+            Span::styled("loopback", Style::new().fg(pl.muted)),
+        ]));
+    }
+    lines.push(Line::from(Span::styled(
+        p.addrs.iter().map(|a| if a == "*" { format!("*:{} (all interfaces)", p.port) } else { format!("{a}:{}", p.port) }).collect::<Vec<_>>().join("   "),
+        Style::new().fg(pl.faint),
+    )));
+    lines.push(Line::default());
+    lines.push(section("Process"));
+    lines.push(Line::from(Span::styled(p.proc.cmdline.clone(), Style::new().fg(pl.soft))));
+    if !p.proc.cwd.is_empty() && p.proc.cwd != "/" {
+        lines.push(Line::from(Span::styled(home_rel(&p.proc.cwd), Style::new().fg(pl.muted))));
+    }
+    lines.push(stats(&[("cpu", pct(p.proc.cpu)), ("memory", mem_str(p.proc.mem))]));
+    if let Some(l) = &p.session {
+        lines.push(Line::default());
+        lines.push(section(&format!("Started by a {} session", l.tool.label())));
+        lines.push(Line::from(Span::styled(l.title.clone(), Style::new().fg(pl.soft))));
+        lines.push(Line::from(vec![
+            Span::styled("s", Style::new().fg(pl.fg).bold()),
+            Span::styled(" show it in Sessions", Style::new().fg(pl.muted)),
+        ]));
+    } else if p.detached() {
+        lines.push(Line::default());
+        lines.push(section("Detached"));
+        lines.push(Line::from(Span::styled(
+            "No terminal or agent is attached any more: whatever started it has closed. Close it with x if you don't need it.",
+            Style::new().fg(pl.muted),
+        )));
+    } else if let Some(tty) = &p.tty {
+        let app_name = app.snap.terminals.iter().find(|t| &t.tty == tty).map(|t| t.app.clone()).unwrap_or_default();
+        lines.push(Line::default());
+        lines.push(section("Started from"));
+        lines.push(Line::from(Span::styled(format!("{} in {app_name}", tty.trim_start_matches("tty")), Style::new().fg(pl.soft))));
     }
 }

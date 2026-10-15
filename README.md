@@ -15,11 +15,11 @@
 **`top` for your coding agents.**
 
 See every pi, Claude Code, Codex, opencode, Gemini CLI and aider session you have running, what each one is doing right now, the sub-agents working inside
-it, and every open terminal. Press `↵` to jump straight to its tab.
+it, every open terminal and every port your dev servers hold open. Press `↵` to jump straight to its tab.
 
 </div>
 
-<img alt="whosup in action: sessions from pi, Claude Code and Codex with their sub-agents; a Claude session stops to ask for approval and jumps to the top; a search; jumping to a terminal tab; the Terminals and Usage tabs; the light theme" src="docs/whosup-demo.gif">
+<img alt="whosup in action: sessions from pi, Claude Code and Codex with their sub-agents; a Claude session stops to ask for approval and jumps to the top; a search; jumping to a terminal tab; the Terminals tab; closing a detached dev server's port in the Ports tab; the Usage tab; the light theme" src="docs/whosup-demo.gif">
 
 <details>
 <summary>Still screenshots (dark and light)</summary>
@@ -40,9 +40,12 @@ terminal tabs. whosup answers the questions you'd otherwise answer by clicking t
 - **What is each one doing right now?** Thinking, or running `bash`, `Edit`, `Grep`, …
 - **Which sub-agents are running inside it**, and what did the finished ones report?
 - **What is every open terminal running**, and which one holds that session?
+- **Which ports are open, and who opened them?** That dev server an agent started an hour ago,
+  still holding `:3000`.
 
 It only reads the files the agents already write and the system's process list. It never talks to
-an agent, sends anything over the network, or changes a file.
+an agent, sends anything over the network, or changes a file. The only things it ever stops are the
+sessions and ports you ask it to, after asking you to confirm.
 
 ## Features
 
@@ -67,6 +70,10 @@ an agent, sends anything over the network, or changes a file.
 - **A Terminals tab** listing every open terminal: its tty, the app that owns it (Ghostty, iTerm2,
   Terminal, tmux, ssh, …), the foreground command, background jobs, folder, CPU and memory.
   `s` on a terminal shows the agent session inside it.
+- **A Ports tab** listing every port your processes are listening on, the process holding it, and
+  where it came from: the agent session that started it, the terminal it runs in, or *detached* (a
+  dev server still running after whatever started it closed). It marks ports other machines on your
+  network can reach. `o` opens one in the browser and `x` closes it.
 - **Files changed**, per session, from its edit tool calls, with a warning when two live sessions
   have edited the same file in the last hour.
 - **A details pane** with the last prompt and reply (lightly formatted Markdown), turns, tool calls,
@@ -85,6 +92,16 @@ sessions count on the day of their last activity.
 ### The Terminals tab
 
 <img alt="whosup's Terminals tab: five terminals, two running agents, with their CPU and memory" src="docs/whosup-terminals.png">
+
+### The Ports tab
+
+<img alt="whosup's Ports tab: eight listening ports; a Next.js server started from a VS Code terminal and open to the network, a detached Astro server, a Vite server started by a pi session and two by a Claude Code session, then ports held by apps" src="docs/whosup-ports.png">
+
+`↵` goes to the terminal the server runs in, `s` shows the agent session that started it, `o` opens
+`http://localhost:<port>`, and `x` closes the port: `k` ends the process holding it (SIGTERM) and
+`9` force-kills it. Ports started from your terminals and agents, or running in one of your folders,
+come first; ports held by apps (Spotify, Postgres.app, …) are listed under *other apps*. Only your
+own processes are shown.
 
 ## Install
 
@@ -135,16 +152,18 @@ whosup --interrupt ttys003  # press Esc in that tty's tab
 | Key | Action |
 | --- | --- |
 | `/` | Search: every word must match the title, folder, agent, model, first prompt or a sub-agent's task (`↵` keeps it, `esc` clears it) |
-| `tab` · `1` · `2` · `3` | Switch between Sessions, Terminals and Usage |
+| `tab` · `1` · `2` · `3` · `4` | Switch between Sessions, Terminals, Ports and Usage |
 | `↑` `↓` · `j` `k` | Move the selection (`PgUp` / `PgDn`, `g` / `G` jump) |
 | `←` `→` · `h` `l` | Collapse or expand a session's sub-agents (closed sessions start collapsed) |
 | `↵` | Live session or terminal: bring its tab to the front. Closed session: resume it |
-| `s` | On a terminal: show the agent session running in it |
+| `s` | On a terminal: show the agent session running in it. On a port: show the session that started it |
+| `o` | On a port: open `http://localhost:<port>` in the browser |
 | `J` `K` | Scroll the details pane |
 | `v` | Read the whole conversation of the selected session or sub-agent (`v` / `esc` closes) |
 | `y` then `r` `i` `f` `d` `l` | Copy the resume command, session id, transcript path, folder or last reply |
 | `e` | Export the conversation to Markdown in `~/Downloads` |
 | `x` | Stop a live session: then `i` interrupts its turn (presses Esc in its Ghostty or iTerm2 tab) or `k` ends it (SIGTERM) |
+| `x` (Ports) | Close the selected port: then `k` ends the process holding it (SIGTERM) or `9` force-kills it |
 | `N` | Start a new session in the selected session's folder: `1` pi, `2` claude, `3` codex, `4` opencode, `5` gemini, `6` aider (those on your PATH) |
 | `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
 | `f` | Hide finished sub-agents |
@@ -281,6 +300,8 @@ whosup finds agents by their process, so it sees them wherever they run:
    resumed sessions.
 4. **Find terminals.** `ps` gives every tty and its foreground process group; walking each tty's
    parent processes finds the app that owns it.
+5. **Find ports.** `lsof` lists the TCP ports your processes listen on; walking each process's
+   parents finds the agent session or terminal that started it.
 
 Codex desktop-app threads have no process of their own, so they count as live while Codex.app (or
 the Codex editor extension) is running and either some process holds the thread's transcript open,

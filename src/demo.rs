@@ -288,5 +288,31 @@ pub fn snapshot() -> Snapshot {
             s.t.daily.insert(today - k, crate::data::Day { cost, tokens: (cost * 380_000.0) as u64, estimated: est, est_cost: if est { cost } else { 0.0 } });
         }
     }
-    Snapshot { sessions, orphan_procs: vec![], terminals }
+    let port = |port: u16, addrs: &[&str], pid: u32, cmd: &str, cwd: &str, started: f64, mb: u64, tty: Option<u32>, link: Option<(Tool, &str, &str)>| crate::ports::Port {
+        key: format!("port:{port}:{pid}"),
+        port,
+        addrs: addrs.iter().map(|a| a.to_string()).collect(),
+        proc: Proc {
+            pid,
+            name: cmd.split(' ').next().unwrap_or(cmd).into(),
+            cmdline: cmd.into(),
+            cwd: if cwd.starts_with('/') { cwd.into() } else { format!("{HOME}/{cwd}") },
+            start_ms: ago(started),
+            cpu: 0.3,
+            mem: mb * 1_048_576,
+        },
+        tty: tty.map(|n| format!("ttys{n:03}")),
+        session: link.map(|(tool, key, title)| SessionLink { tool, key: Some(key.into()), title: title.into() }),
+    };
+    let ports = vec![
+        port(3000, &["*"], 51_207, "node next dev", "code/shop", 20.0, 412, Some(5), None),
+        port(5173, &["[::1]"], 51_840, "node vite --port 5173", "code/web", 38.0, 188, Some(1), Some((Tool::Pi, "s:demo/1.jsonl", "Migrate auth to OAuth 2.1"))),
+        port(8080, &["127.0.0.1"], 52_311, "target/debug/api --port 8080", "code/api", 6.0, 64, Some(2), Some((Tool::Claude, "s:demo/0.jsonl", "Add rate limiting to the public API"))),
+        port(9229, &["127.0.0.1"], 52_312, "node --inspect server.js", "code/api", 6.0, 92, Some(2), Some((Tool::Claude, "s:demo/0.jsonl", "Add rate limiting to the public API"))),
+        port(4321, &["[::1]"], 50_977, "node astro dev", "code/docs", 190.0, 140, None, None),
+        port(5432, &["127.0.0.1", "[::1]"], 812, "postgres -D /Users/demo/Library/Application Support/Postgres/var-16", "/", 2_900.0, 38, None, None),
+        port(6379, &["127.0.0.1"], 815, "redis-server 127.0.0.1:6379", "/", 2_900.0, 12, None, None),
+        port(57621, &["*"], 952, "Spotify", "/", 3_100.0, 310, None, None),
+    ];
+    Snapshot { sessions, orphan_procs: vec![], terminals, ports }
 }

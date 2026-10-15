@@ -592,6 +592,7 @@ pub struct Snapshot {
     /// agent processes we could not tie to a transcript
     pub orphan_procs: Vec<ProcInfo>,
     pub terminals: Vec<crate::terms::Terminal>,
+    pub ports: Vec<crate::ports::Port>,
 }
 
 pub struct Scanner {
@@ -1648,6 +1649,32 @@ impl Scanner {
             }
         }
 
+        // 5. listening ports, linked to the agent session that started them
+        let mut ports = crate::ports::scan(&self.sys);
+        for port in ports.iter_mut() {
+            let line = crate::ports::lineage(&self.sys, port.proc.pid);
+            let by_session = sessions
+                .iter()
+                .filter_map(|s| s.proc.as_ref().map(|pr| (pr.pid, s)))
+                .filter_map(|(pid, s)| line.iter().position(|&a| a == pid).map(|d| (d, s)))
+                .min_by_key(|(d, _)| *d);
+            port.session = match by_session {
+                Some((_, s)) => Some(crate::terms::SessionLink { tool: s.tool, key: Some(s.key.clone()), title: s.title() }),
+                None => orphans.iter().find(|pr| line.contains(&pr.pid)).map(|pr| crate::terms::SessionLink {
+                    tool: pr.tool,
+                    key: Some(format!("p:{}", pr.pid)),
+                    title: format!("{} session", pr.tool.label()),
+                }),
+            };
+            // a server started in the background keeps no tty of its own: use the one it was started from
+            if port.tty.is_none() {
+                port.tty = terminals
+                    .iter()
+                    .find(|t| t.shell.iter().chain(&t.foreground).chain(&t.jobs).any(|p| line.contains(&p.pid)))
+                    .map(|t| t.tty.clone());
+            }
+        }
+
         // two live sessions editing the same file within the last hour
         mark_shared_files(&mut sessions, now);
 
@@ -1660,7 +1687,7 @@ impl Scanner {
             // sessions waiting for you come first among the live ones
             (!live, !s.needs_you(), std::cmp::Reverse(key), s.key.clone())
         });
-        Snapshot { sessions, orphan_procs: orphans, terminals }
+        Snapshot { sessions, orphan_procs: orphans, terminals, ports }
     }
 }
 

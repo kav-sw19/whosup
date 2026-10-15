@@ -68,16 +68,16 @@ impl Terminal {
     }
 }
 
-struct PsRow {
-    pid: u32,
-    ppid: u32,
+pub(crate) struct PsRow {
+    pub pid: u32,
+    pub ppid: u32,
     pgid: u32,
     tpgid: u32,
-    tty: String,
-    comm: String,
+    pub tty: String,
+    pub comm: String,
 }
 
-fn ps_rows() -> Vec<PsRow> {
+pub(crate) fn ps_rows() -> Vec<PsRow> {
     let Ok(out) = Command::new("ps").args(["-ax", "-o", "pid=,ppid=,pgid=,tpgid=,tty=,comm="]).output() else {
         return vec![];
     };
@@ -133,7 +133,7 @@ fn app_for(mut pid: u32, by_pid: &HashMap<u32, &PsRow>) -> String {
     "terminal".into()
 }
 
-fn proc_info(sys: &System, r: &PsRow) -> Proc {
+pub(crate) fn proc_info(sys: &System, r: &PsRow) -> Proc {
     match sys.process(Pid::from_u32(r.pid)) {
         Some(p) => Proc {
             pid: r.pid,

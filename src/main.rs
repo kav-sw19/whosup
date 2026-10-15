@@ -15,6 +15,7 @@ mod settings;
 mod focus;
 mod providers;
 mod terms;
+mod ports;
 mod ui;
 
 use data::{Scanner, Session, Snapshot};
@@ -31,7 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const HELP: &str = "whosup — live view of coding-agent sessions (pi, Claude Code, Codex, …), their sub-agents and open terminals
+const HELP: &str = "whosup — live view of coding-agent sessions (pi, Claude Code, Codex, …), their sub-agents, open terminals and ports
 
 USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focus <tty>]
               [--resume <text>] [--watch] [--install-service | --uninstall-service]
@@ -44,12 +45,13 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
   --watch    no window: just send notifications (and remember where sessions ran)
   --install-service    run --watch at login (a launchd agent); --uninstall-service removes it
 
-KEYS: / search · tab/1/2/3 sessions·terminals·usage · ↑/↓ j/k move · ↵ go to the session's terminal tab
+KEYS: / search · tab/1–4 sessions·terminals·ports·usage · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details
       a history: live only → recent → 7 days → all · p group by project · v read the conversation
       y copy (r resume command, i id, f file, d folder, l last reply) · e export to Markdown
       x stop a live session (asks: i interrupt its turn with Esc, k end it)
       N start a new session in the selected session's folder (asks: 1 pi, 2 claude, 3 codex)
+      ports: ↵ go to its terminal · o open in the browser · x close it (k end, 9 force) · s its session
       f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
@@ -59,6 +61,7 @@ pub enum RowRef {
     Orphan(usize),
     Terminal(usize),
     Job(usize, usize),
+    Port(usize),
     /// Non-selectable separator between live and recently closed sessions.
     Divider,
     /// Non-selectable project header when grouping (index into `App::groups`).
@@ -107,6 +110,7 @@ pub struct GroupInfo {
 pub enum View {
     Sessions,
     Terminals,
+    Ports,
     Usage,
 }
 
@@ -179,7 +183,7 @@ pub struct App {
     focus_tx: mpsc::Sender<Result<String, String>>,
     focus_rx: mpsc::Receiver<Result<String, String>>,
     /// selection remembered per view
-    saved_sel: [Option<String>; 3],
+    saved_sel: [Option<String>; 4],
     /// the Usage tab: days shown (7, 30 or 90) and the report
     pub usage_days: i64,
     pub usage: Option<usage::Report>,
@@ -222,6 +226,8 @@ pub struct App {
     pub starting: Option<(String, Option<String>, Vec<(char, providers::Tool, &'static str)>)>,
     /// asking how to stop a session (`x`): its pid, title, tty and terminal app
     pub stopping: Option<(u32, String, Option<String>, String)>,
+    /// asking how to close a port (`x` in Ports): pid, port, process name
+    pub closing: Option<(u32, u16, String)>,
     /// search text (`/`); every word must match
     pub query: String,
     /// typing into the search box
@@ -297,6 +303,20 @@ pub fn terminal_matches(t: &terms::Terminal, words: &[String]) -> bool {
     words.iter().all(|w| hay.contains(w.as_str()))
 }
 
+pub fn port_matches(p: &ports::Port, words: &[String]) -> bool {
+    if words.is_empty() {
+        return true;
+    }
+    let mut hay = vec![p.port.to_string(), format!(":{}", p.port), p.proc.cmdline.clone(), p.proc.cwd.clone(), p.proc.pid.to_string()];
+    hay.extend(p.addrs.iter().cloned());
+    hay.extend(p.tty.clone());
+    if let Some(l) = &p.session {
+        hay.push(format!("{} {}", l.tool.label(), l.title));
+    }
+    let hay = hay.join("\n").to_lowercase();
+    words.iter().all(|w| hay.contains(w.as_str()))
+}
+
 impl App {
     fn new(scanner: Scanner) -> Self {
         let mut a = Self::new_inner(scanner, false);
@@ -328,11 +348,11 @@ impl App {
             flash: None,
             focus_tx,
             focus_rx,
-            saved_sel: [None, None, None],
+            saved_sel: [None, None, None, None],
             usage_days: 30,
             usage: None,
             scanner,
-            snap: Snapshot { sessions: vec![], orphan_procs: vec![], terminals: vec![] },
+            snap: Snapshot { sessions: vec![], orphan_procs: vec![], terminals: vec![], ports: vec![] },
             show_recent: false,
             hide_finished: false,
             collapsed: HashSet::new(),
@@ -357,6 +377,7 @@ impl App {
             searching: false,
             copying: false,
             stopping: None,
+            closing: None,
             starting: None,
         };
         ui::set_light(a.settings.light);
@@ -460,6 +481,45 @@ impl App {
         }
     }
 
+    /// `x` in Ports: ask how to close the selected port.
+    fn ask_close(&mut self) {
+        let Some(RowRef::Port(i)) = self.selected() else { return self.flash("Select a port first", true) };
+        let p = &self.snap.ports[*i];
+        if p.proc.pid == std::process::id() {
+            return self.flash("That's whosup itself", true);
+        }
+        self.closing = Some((p.proc.pid, p.port, p.proc.name.clone()));
+    }
+
+    /// The answer to `x` in Ports: `k` end the process (SIGTERM), `9` kill it.
+    fn close_port(&mut self, how: char) {
+        let Some((pid, port, name)) = self.closing.take() else { return };
+        let force = match how {
+            'k' => false,
+            '9' => true,
+            _ => return self.flash("Left it open", false),
+        };
+        if self.demo {
+            return self.flash(format!("Closed port {port} (demo: nothing was stopped)"), false);
+        }
+        self.flash(format!("Closing port {port} ({name})…"), false);
+        let tx = self.focus_tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(ports::close(pid, port, force));
+        });
+        self.refresh_soon = true;
+    }
+
+    /// `o` in Ports: open http://localhost:<port> in the browser.
+    fn open_port(&mut self) {
+        let Some(RowRef::Port(i)) = self.selected() else { return };
+        let url = self.snap.ports[*i].url();
+        match std::process::Command::new("open").arg(&url).status() {
+            Ok(st) if st.success() => self.flash(format!("Opened {url}"), false),
+            _ => self.flash(format!("Couldn't open {url}"), true),
+        }
+    }
+
     /// `e`: write the selected session's conversation to ~/Downloads as Markdown.
     fn export_session(&mut self) {
         let Some(s) = self.selected_session() else { return self.flash("Select a session first", true) };
@@ -554,6 +614,23 @@ impl App {
     fn rebuild_rows(&mut self) {
         let mut rows = Vec::new();
         if self.view == View::Usage {
+            return self.finish_rows(rows);
+        }
+        if self.view == View::Ports {
+            // started from your terminals and agents first, then ports apps keep open
+            let words = self.query_words();
+            let mut shown: Vec<usize> = (0..self.snap.ports.len()).filter(|&i| port_matches(&self.snap.ports[i], &words)).collect();
+            shown.sort_by_key(|&i| self.snap.ports[i].port);
+            let (yours, apps): (Vec<usize>, Vec<usize>) = shown.into_iter().partition(|&i| self.snap.ports[i].yours());
+            for &i in &yours {
+                rows.push((self.snap.ports[i].key.clone(), RowRef::Port(i)));
+            }
+            if !apps.is_empty() {
+                rows.push(("div:apps".to_string(), RowRef::Divider));
+            }
+            for &i in &apps {
+                rows.push((self.snap.ports[i].key.clone(), RowRef::Port(i)));
+            }
             return self.finish_rows(rows);
         }
         if self.view == View::Terminals {
@@ -842,6 +919,10 @@ impl App {
                 }
                 Err("This session isn't running in a terminal whosup can see".into())
             }
+            Some(RowRef::Port(i)) => {
+                let p = &self.snap.ports[*i];
+                p.tty.clone().ok_or_else(|| format!("{} isn't running in a terminal", p.proc.name))
+            }
             Some(RowRef::Orphan(k)) => {
                 term_of_pid(self.snap.orphan_procs[*k].pid).ok_or_else(|| "This process has no terminal".into())
             }
@@ -888,14 +969,18 @@ impl App {
 
     /// From a terminal row, show the agent session running in it.
     fn show_session(&mut self) {
-        let Some(RowRef::Terminal(i)) = self.selected() else { return };
-        match self.snap.terminals[*i].session.as_ref().and_then(|l| l.key.clone()) {
+        let link = match self.selected() {
+            Some(RowRef::Terminal(i)) => self.snap.terminals[*i].session.as_ref(),
+            Some(RowRef::Port(i)) => self.snap.ports[*i].session.as_ref(),
+            _ => return,
+        };
+        match link.and_then(|l| l.key.clone()) {
             Some(key) => {
                 self.set_view(View::Sessions);
                 self.selected_key = Some(key);
                 self.rebuild_rows();
             }
-            None => self.flash("No agent session in this terminal", true),
+            None => self.flash(if self.view == View::Ports { "No agent session started this" } else { "No agent session in this terminal" }, true),
         }
     }
 
@@ -1057,6 +1142,12 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     app.stop(c);
                     continue;
                 }
+                // the key after `x` in Ports: how to close it
+                if app.closing.is_some() {
+                    let c = if let KeyCode::Char(c) = k.code { c } else { ' ' };
+                    app.close_port(c);
+                    continue;
+                }
                 // the key after `y`: what to copy
                 if app.copying {
                     app.copying = false;
@@ -1103,11 +1194,14 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     KeyCode::Left | KeyCode::Char('h') => app.set_collapsed(true),
                     KeyCode::Right | KeyCode::Char('l') => app.set_collapsed(false),
                     KeyCode::Enter => app.activate(),
-                    KeyCode::Char('s') if app.view == View::Terminals => app.show_session(),
+                    KeyCode::Char('s') if matches!(app.view, View::Terminals | View::Ports) => app.show_session(),
+                    KeyCode::Char('x') if app.view == View::Ports => app.ask_close(),
+                    KeyCode::Char('o') if app.view == View::Ports => app.open_port(),
                     KeyCode::Tab => {
                         let v = match app.view {
                             View::Sessions => View::Terminals,
-                            View::Terminals => View::Usage,
+                            View::Terminals => View::Ports,
+                            View::Ports => View::Usage,
                             View::Usage => View::Sessions,
                         };
                         app.set_view(v)
@@ -1116,11 +1210,13 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                         let v = match app.view {
                             View::Sessions => View::Usage,
                             View::Terminals => View::Sessions,
-                            View::Usage => View::Terminals,
+                            View::Ports => View::Terminals,
+                            View::Usage => View::Ports,
                         };
                         app.set_view(v)
                     }
-                    KeyCode::Char('3') => app.set_view(View::Usage),
+                    KeyCode::Char('3') => app.set_view(View::Ports),
+                    KeyCode::Char('4') => app.set_view(View::Usage),
                     KeyCode::Char('a') if app.view == View::Usage => {
                         app.usage_days = match app.usage_days {
                             7 => 30,
@@ -1344,6 +1440,9 @@ mod render_test {
         if env("WHOSUP_VIEW").as_deref() == Some("terminals") {
             app.set_view(View::Terminals);
         }
+        if env("WHOSUP_VIEW").as_deref() == Some("ports") {
+            app.set_view(View::Ports);
+        }
         if env("WHOSUP_VIEW").as_deref() == Some("usage") {
             app.set_view(View::Usage);
             app.refresh();
@@ -1545,8 +1644,8 @@ mod screenshots {
         app.settings.notify = true;
         app.cycle_history();
         app.rebuild_rows();
-        if view == View::Terminals {
-            app.set_view(View::Terminals);
+        if view != View::Sessions {
+            app.set_view(view);
         }
         app.move_sel(sel);
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -1630,11 +1729,22 @@ mod screenshots {
         // 4. Enter jumps to its tab
         flash(&mut app, "Switched to s002 in Ghostty");
         shoot(&mut app, 16);
-        // 5. Terminals, then Usage
+        // 5. Terminals, then Ports: close a dev server left running, then Usage
         app.flash = None;
         app.set_view(View::Terminals);
         app.move_sel(1);
         shoot(&mut app, 16);
+        app.set_view(View::Ports);
+        shoot(&mut app, 8);
+        app.move_sel(1);
+        shoot(&mut app, 12);
+        app.ask_close();
+        shoot(&mut app, 12);
+        app.closing = None;
+        app.snap.ports.retain(|p| p.port != 4321);
+        app.rebuild_rows();
+        flash(&mut app, "Closed port 4321 (ended pid 50977)");
+        shoot(&mut app, 14);
         app.set_view(View::Usage);
         app.refresh();
         app.flash = None;
@@ -1655,6 +1765,7 @@ mod screenshots {
         shot(false, View::Sessions, 1, 150, 27, "whosup-dark.svg");
         shot(true, View::Sessions, 7, 150, 27, "whosup-light.svg");
         shot(false, View::Terminals, 1, 150, 22, "whosup-terminals.svg");
+        shot(false, View::Ports, 1, 150, 24, "whosup-ports.svg");
     }
 }
 
