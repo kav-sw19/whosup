@@ -1,6 +1,7 @@
 mod cost;
 mod convo;
 mod data;
+mod watch;
 mod more_agents;
 mod opencode;
 mod export;
@@ -32,13 +33,15 @@ use std::{
 const HELP: &str = "whosup — live view of coding-agent sessions (pi, Claude Code, Codex, …), their sub-agents and open terminals
 
 USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focus <tty>]
-              [--resume <text>]
+              [--resume <text>] [--watch] [--install-service | --uninstall-service]
 
   --dir      pi agent dir (default: $PI_CODING_AGENT_DIR or ~/.pi/agent); Claude Code and Codex
              use $CLAUDE_CONFIG_DIR (~/.claude) and $CODEX_HOME (~/.codex)
   --recent   also list sessions touched in the last N hours (default 24; toggle with `a`)
   --once     print a plain-text snapshot and exit (--all: include closed recent sessions)
   --demo     show made-up sessions and terminals (for trying whosup out, or screenshots)
+  --watch    no window: just send notifications (and remember where sessions ran)
+  --install-service    run --watch at login (a launchd agent); --uninstall-service removes it
 
 KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details
@@ -112,6 +115,44 @@ pub enum Target {
     Resume(resume::Plan),
 }
 
+fn phase_of(s: &Session) -> Phase {
+    if s.awaiting_approval {
+        Phase::Approval
+    } else if s.stuck().is_some() {
+        Phase::Stuck
+    } else if s.t.is_busy() {
+        Phase::Busy
+    } else if s.needs_you() && s.t.last_stop.as_deref() == Some("error") {
+        Phase::Error
+    } else if s.needs_you() {
+        Phase::NeedsYou
+    } else {
+        Phase::Other
+    }
+}
+
+/// (title, subtitle, body) for each live session that was working at the last refresh and now
+/// needs you.
+fn notifications(before: &std::collections::HashMap<String, Phase>, sessions: &[Session]) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for s in sessions.iter().filter(|s| s.live()) {
+        if before.get(&s.key).copied() != Some(Phase::Busy) {
+            continue;
+        }
+        let place = s.tty.as_deref().map(|t| format!(" · {}", t.trim_start_matches("tty"))).unwrap_or_default();
+        let subtitle = format!("{}{place}", s.tool.label());
+        let title = match phase_of(s) {
+            Phase::Approval => format!("Approve {}?", s.t.last_tool.as_deref().unwrap_or("a tool call")),
+            Phase::NeedsYou => "Waiting for you".to_string(),
+            Phase::Stuck => format!("Looks stuck: {}", s.stuck().unwrap_or_default().trim_start_matches(|c| c != ' ').trim()),
+            Phase::Error => "Stopped with an error".to_string(),
+            _ => continue,
+        };
+        out.push((title, subtitle, s.title()));
+    }
+    out
+}
+
 /// What a live session was doing at the last refresh, for notifications.
 #[derive(Clone, Copy, PartialEq)]
 enum Phase {
@@ -155,6 +196,8 @@ pub struct App {
     phases: Option<std::collections::HashMap<String, Phase>>,
     /// show made-up data (`--demo`) instead of scanning
     demo: bool,
+    /// running headless as `--watch`
+    watching: bool,
     /// how far back closed sessions go (`a` cycles)
     pub history: History,
     /// the configured recent window, in ms (config `recent_hours` or `--recent`)
@@ -295,6 +338,7 @@ impl App {
             hosts: settings::Hosts::load(),
             phases: None,
             demo,
+            watching: false,
             history: History::Live,
             base_window_ms,
             convo: None,
@@ -645,47 +689,15 @@ impl App {
     }
 
     /// Notify (when enabled) as a live session finishes its turn or hits an error.
+    /// Notify as a live session finishes its turn, wants approval, looks stuck or errors: when
+    /// notifications are on (always in `--watch`), and not when a watcher is already doing it.
     fn notify_changes(&mut self) {
-        let phase = |s: &Session| {
-            if s.awaiting_approval {
-                Phase::Approval
-            } else if s.stuck().is_some() {
-                Phase::Stuck
-            } else if s.t.is_busy() {
-                Phase::Busy
-            } else if s.needs_you() && s.t.last_stop.as_deref() == Some("error") {
-                Phase::Error
-            } else if s.needs_you() {
-                Phase::NeedsYou
-            } else {
-                Phase::Other
-            }
-        };
         let now: std::collections::HashMap<String, Phase> =
-            self.snap.sessions.iter().filter(|s| s.live()).map(|s| (s.key.clone(), phase(s))).collect();
-        if let (Some(before), true) = (&self.phases, self.settings.notify) {
-            for s in self.snap.sessions.iter().filter(|s| s.live()) {
-                let (was, is) = (before.get(&s.key).copied(), now[&s.key]);
-                if was != Some(Phase::Busy) {
-                    continue;
-                }
-                let place = s.tty.as_deref().map(|t| format!(" · {}", t.trim_start_matches("tty"))).unwrap_or_default();
-                let subtitle = format!("{}{place}", s.tool.label());
-                match is {
-                    Phase::Approval => notify(
-                        &format!("Approve {}?", s.t.last_tool.as_deref().unwrap_or("a tool call")),
-                        &subtitle,
-                        &s.title(),
-                    ),
-                    Phase::NeedsYou => notify("Waiting for you", &subtitle, &s.title()),
-                    Phase::Stuck => notify(
-                        &format!("Looks stuck: {}", s.stuck().unwrap_or_default().trim_start_matches(|c| c != ' ').trim()),
-                        &subtitle,
-                        &s.title(),
-                    ),
-                    Phase::Error => notify("Stopped with an error", &subtitle, &s.title()),
-                    _ => {}
-                }
+            self.snap.sessions.iter().filter(|s| s.live()).map(|s| (s.key.clone(), phase_of(s))).collect();
+        let enabled = self.watching || (self.settings.notify && !watch::running());
+        if let (Some(before), true) = (&self.phases, enabled) {
+            for (title, subtitle, body) in notifications(before, &self.snap.sessions) {
+                notify(&title, &subtitle, &body);
             }
         }
         self.phases = Some(now);
@@ -1118,6 +1130,7 @@ fn main() -> std::io::Result<()> {
     let mut once = false;
     let mut all = false;
     let mut demo = false;
+    let mut watch_mode = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--dir" => dir = args.next().map(PathBuf::from),
@@ -1168,6 +1181,27 @@ fn main() -> std::io::Result<()> {
                 }
                 return Ok(());
             }
+            "--watch" => watch_mode = true,
+            "--install-service" => {
+                match watch::install() {
+                    Ok(m) => println!("{m}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
+            "--uninstall-service" => {
+                match watch::uninstall() {
+                    Ok(m) => println!("{m}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
             // bring a tty's tab to the front, e.g. `whosup --focus ttys003`
             "--focus" => {
                 let tty = args.next().unwrap_or_default();
@@ -1200,6 +1234,9 @@ fn main() -> std::io::Result<()> {
     if once {
         print_once(&if demo { demo::snapshot() } else { scanner.scan() }, all);
         return Ok(());
+    }
+    if watch_mode {
+        return watch::run(App::new_inner(scanner, false));
     }
     let app = if demo { App::new_demo(scanner) } else { App::new(scanner) };
     let mut term = ratatui::init();
@@ -1602,5 +1639,31 @@ mod group_tests {
         assert_eq!(app.project_of(&root.join("crates/core").display().to_string()), root.display().to_string());
         assert_eq!(app.project_of("/no/such/folder"), "/no/such/folder");
         std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+#[cfg(test)]
+mod notify_tests {
+    use super::*;
+
+    #[test]
+    fn notifies_when_working_turns_into_needing_you() {
+        let mut snap = demo::snapshot();
+        // at the last refresh every live session was working
+        let before: std::collections::HashMap<String, Phase> =
+            snap.sessions.iter().filter(|s| s.live()).map(|s| (s.key.clone(), Phase::Busy)).collect();
+        let claude = snap.sessions.iter().position(|s| s.title() == "Add rate limiting to the public API").unwrap();
+        snap.sessions[claude].awaiting_approval = true;
+        let got = notifications(&before, &snap.sessions);
+        let titles: Vec<(&str, &str)> = got.iter().map(|(t, _, b)| (t.as_str(), b.as_str())).collect();
+        assert!(titles.contains(&("Waiting for you", "Fix flaky checkout test")), "{titles:?}");
+        assert!(titles.contains(&("Approve Edit?", "Add rate limiting to the public API")), "{titles:?}");
+        // the pi session is still working: nothing
+        assert!(!titles.iter().any(|(_, b)| *b == "Migrate auth to OAuth 2.1"));
+        assert_eq!(got.iter().find(|(t, _, _)| t == "Approve Edit?").unwrap().1, "claude · s002");
+        // a session that was already idle doesn't notify again
+        let idle_before: std::collections::HashMap<String, Phase> =
+            snap.sessions.iter().filter(|s| s.live()).map(|s| (s.key.clone(), Phase::NeedsYou)).collect();
+        assert!(notifications(&idle_before, &snap.sessions).is_empty());
     }
 }

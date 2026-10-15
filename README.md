@@ -201,6 +201,18 @@ to waiting for you, waiting for approval, an error, or looking stuck. They appea
 `osascript` notifications, so allow notifications for it in System Settings if none show up.
 Settings live in `~/.config/whosup/config`.
 
+### Without the window
+
+`whosup --watch` sends the same notifications with no UI (and keeps remembering where sessions ran,
+for resume). To have it run at login:
+
+```sh
+whosup --install-service     # a launchd agent running whosup --watch; log in ~/Library/Logs/whosup-watch.log
+whosup --uninstall-service
+```
+
+While a watcher runs, the TUI leaves notifying to it, so you never get two of each.
+
 ## Configuration
 
 `~/.config/whosup/config` (or `$XDG_CONFIG_HOME/whosup/config`), one `key=value` per line:
