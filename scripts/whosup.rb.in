@@ -1,0 +1,20 @@
+# Homebrew formula for whosup, filled in by scripts/package.sh for each release.
+class Whosup < Formula
+  desc "Live terminal view of your coding-agent sessions, sub-agents and terminals"
+  homepage "https://github.com/kav-sw19/whosup"
+  url "@URL@"
+  sha256 "@SHA256@"
+  version "@VERSION@"
+  license "MIT"
+
+  depends_on :macos
+
+  def install
+    bin.install "whosup"
+  end
+
+  test do
+    assert_match "whosup", shell_output("#{bin}/whosup --help")
+    assert_match "Fix flaky checkout test", shell_output("#{bin}/whosup --demo --once")
+  end
+end

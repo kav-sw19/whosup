@@ -81,7 +81,17 @@ sessions count on the day of their last activity.
 
 ## Install
 
-Requires Rust 1.85 or newer.
+**Homebrew** (once the first release and the `kav-sw19/homebrew-tap` tap are published):
+
+```sh
+brew install kav-sw19/tap/whosup
+```
+
+**Prebuilt binary:** download `whosup-<version>-macos-universal.tar.gz` from
+[Releases](https://github.com/kav-sw19/whosup/releases) (Apple Silicon and Intel), unpack it and put
+`whosup` on your PATH.
+
+**From source** (Rust 1.85 or newer):
 
 ```sh
 cargo install --git https://github.com/kav-sw19/whosup
@@ -307,6 +317,18 @@ cargo test --release screenshots -- --ignored      # writes docs/*.svg
 swiftc -O docs/svg2png.swift -o /tmp/svg2png
 for f in docs/*.svg; do /tmp/svg2png "$f" "${f%.svg}.png" 2; done && rm docs/*.svg
 ```
+
+## Releasing
+
+Bump `version` in `Cargo.toml`, commit, then push a matching tag:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The Release workflow runs the tests, builds a universal macOS binary (`scripts/package.sh`), and
+publishes it with its SHA-256 and a Homebrew formula (`whosup.rb`). With a `TAP_TOKEN` repository
+secret that can push to `kav-sw19/homebrew-tap`, it also updates the tap's `Formula/whosup.rb`.
 
 ## Development
 

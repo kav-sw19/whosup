@@ -1,0 +1,50 @@
+name: Release
+
+# Push a tag like v0.2.0 to publish a release:
+#   git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      # optional: a token that can push to kav-sw19/homebrew-tap (repository secret TAP_TOKEN)
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release --locked
+      - name: Check the tag matches Cargo.toml
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$v\"" Cargo.toml || { echo "tag $GITHUB_REF_NAME doesn't match Cargo.toml"; exit 1; }
+      - name: Package (universal binary, tarball, formula)
+        run: scripts/package.sh "${GITHUB_REF_NAME#v}"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 dist/whosup.rb \
+            --title "whosup $GITHUB_REF_NAME" --generate-notes
+      # Optional: keep the Homebrew tap up to date. Needs a repository secret TAP_TOKEN
+      # (a token that can push to kav-sw19/homebrew-tap).
+      - name: Update the Homebrew tap
+        if: ${{ env.TAP_TOKEN != '' }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/kav-sw19/homebrew-tap.git" tap
+          mkdir -p tap/Formula && cp dist/whosup.rb tap/Formula/whosup.rb
+          cd tap
+          git config user.name "whosup release"
+          git config user.email "actions@users.noreply.github.com"
+          git add Formula/whosup.rb
+          git commit -m "whosup ${GITHUB_REF_NAME}"
+          git push
