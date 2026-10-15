@@ -61,7 +61,7 @@ an agent, sends anything over the network, or changes a file.
   Terminal, tmux, ssh, …), the foreground command, background jobs, folder, CPU and memory.
   `s` on a terminal shows the agent session inside it.
 - **A details pane** with the last prompt and reply (lightly formatted Markdown), turns, tool calls,
-  tokens, context size and, for pi, cost.
+  tokens, context size and cost (recorded by pi, estimated for Claude Code and Codex).
 - **Fast on large histories.** Transcripts are read incrementally, so multi-megabyte sessions cost
   almost nothing after the first read.
 - **Scriptable.** `whosup --once` prints a plain-text snapshot instead of opening the UI.
@@ -137,7 +137,10 @@ Sub-agents show ✓ **done**, ✗ **error**, or ◌ **orphaned** when the sessio
 | **Codex** | process or desktop app + transcript | Thread name, model, status, tokens, prompt and reply | `~/.codex/sessions/` (`$CODEX_HOME`) |
 | opencode, gemini, aider, amp, goose, crush, qwen, cursor-agent, copilot, droid | process only | Folder, uptime, CPU, memory, terminal | — |
 
-Only pi records cost in its transcript; Claude Code and Codex sessions show token counts instead.
+pi records its own cost. For Claude Code and Codex, whosup estimates cost from their token counts
+(input, output, cache reads and writes) at list prices, shown with `≈`. Set your own rates with
+`price.<model>=…` in the config; on a subscription plan the estimate is what the tokens would cost
+through the API, not what you pay.
 
 ## Resuming a closed session
 

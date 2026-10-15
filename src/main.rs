@@ -1,3 +1,4 @@
+mod cost;
 mod data;
 #[cfg(test)]
 mod fixture_tests;
@@ -468,7 +469,7 @@ fn print_once(snap: &Snapshot, all: bool) {
             (None, false) => "closed".into(),
         };
         println!(
-            "{} {:<6} {}  [{}]  {}  {}  {}  ${:.2}",
+            "{} {:<6} {}  [{}]  {}  {}  {}  {}",
             if s.live() { "●" } else { "○" },
             s.tool.label(),
             one_line(&s.title(), 50),
@@ -476,7 +477,7 @@ fn print_once(snap: &Snapshot, all: bool) {
             home_rel(&s.t.cwd),
             short_model(s.t.model.as_deref().unwrap_or("")),
             if s.live() { s.t.activity() } else { "closed".into() },
-            s.t.cost
+            ui::cost_str(s.t.cost, s.t.cost_estimated)
         );
         for a in &s.agents {
             println!(
@@ -611,6 +612,7 @@ fn main() -> std::io::Result<()> {
     if let Some(t) = &config.terminal {
         resume::set_default_terminal(t);
     }
+    cost::set_prices(config.prices.clone());
     let mut hours: f64 = config.recent_hours;
     let mut once = false;
     let mut all = false;

@@ -112,3 +112,24 @@ fn resume_plans() {
     let ghostty = crate::resume::plan(get("refactor the cart"), Some("Ghostty")).unwrap();
     assert_eq!(ghostty.place, crate::resume::Place::Terminal("Ghostty".into()));
 }
+
+#[test]
+fn cost_estimates() {
+    let snap = scan_fixtures();
+    let get = |t: &str| snap.sessions.iter().find(|s| s.title() == t).unwrap();
+    // Claude, opus: 5010 in, 340 out, 27000 cache read, 2000 cache write
+    let claude = get("Fix login redirect");
+    assert!(claude.t.cost_estimated);
+    let want = 5010.0 * 5.0 / 1e6 + 340.0 * 25.0 / 1e6 + 27000.0 * 0.5 / 1e6 + 2000.0 * 6.25 / 1e6;
+    assert!((claude.t.cost - want).abs() < 1e-9, "{} vs {want}", claude.t.cost);
+    // its sub-agent (haiku) is priced too
+    assert!(claude.agents[0].cost > 0.0);
+    // Codex: cached input counted at the cache rate
+    let codex = get("Fix flaky checkout test");
+    let want = 10000.0 * 1.25 / 1e6 + 20000.0 * 0.125 / 1e6 + 800.0 * 10.0 / 1e6;
+    assert!((codex.t.cost - want).abs() < 1e-9, "{} vs {want}", codex.t.cost);
+    // pi records its own cost: never estimated
+    let pi = get("Add rate limiting");
+    assert!(!pi.t.cost_estimated);
+    assert!((pi.t.cost - 0.08).abs() < 1e-9);
+}

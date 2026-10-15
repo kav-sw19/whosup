@@ -124,6 +124,13 @@ pub struct Transcript {
     /// `claude-vscode`, …), Codex's `source` (`cli`, `vscode`, …).
     pub entrypoint: Option<String>,
     pub(crate) last_msg_id: Option<String>,
+    /// token breakdown, for cost estimates (cumulative)
+    pub in_tokens: u64,
+    pub out_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    /// `cost` was estimated from tokens, not recorded by the agent
+    pub cost_estimated: bool,
     /// this file is itself a sub-agent transcript (keep sidechain lines)
     pub(crate) sidechain_file: bool,
 }
@@ -782,7 +789,8 @@ impl Scanner {
                 continue;
             }
             keep.insert(p.clone());
-            let Some(t) = self.cache.get(&p, Tool::Claude, true) else { continue };
+            let Some(mut t) = self.cache.get(&p, Tool::Claude, true) else { continue };
+            crate::cost::fill(&mut t);
             let meta: Value = fs::read_to_string(p.with_extension("meta.json"))
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
@@ -823,7 +831,7 @@ impl Scanner {
                 turns: t.turns,
                 tool_calls: t.tool_calls,
                 tokens: t.tokens,
-                cost: 0.0,
+                cost: t.cost,
                 last_text: t.last_text.clone(),
                 path: Some(p),
             });
@@ -887,6 +895,7 @@ impl Scanner {
             if t.messages == 0 && t.cwd.is_empty() {
                 continue; // nothing useful written yet
             }
+            crate::cost::fill(&mut t);
             sessions.push(Session {
                 tool,
                 host: None,

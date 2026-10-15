@@ -168,6 +168,10 @@ impl Transcript {
                     self.last_tool = None;
                     if let Some(u) = m.get("usage") {
                         let g = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+                        self.in_tokens += g("input_tokens");
+                        self.out_tokens += g("output_tokens");
+                        self.cache_read_tokens += g("cache_read_input_tokens");
+                        self.cache_write_tokens += g("cache_creation_input_tokens");
                         let ctx = g("input_tokens") + g("cache_creation_input_tokens") + g("cache_read_input_tokens");
                         self.tokens += ctx + g("output_tokens");
                         self.context_tokens = ctx + g("output_tokens");
@@ -260,6 +264,13 @@ impl Transcript {
                     "token_count" => {
                         if let Some(t) = p.pointer("/info/total_token_usage/total_tokens").and_then(Value::as_u64) {
                             self.tokens = t;
+                        }
+                        if let Some(u) = p.pointer("/info/total_token_usage") {
+                            let g = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+                            // Codex counts cached input inside input_tokens
+                            self.cache_read_tokens = g("cached_input_tokens");
+                            self.in_tokens = g("input_tokens").saturating_sub(self.cache_read_tokens);
+                            self.out_tokens = g("output_tokens");
                         }
                         if let Some(t) = p.pointer("/info/last_token_usage/total_tokens").and_then(Value::as_u64) {
                             self.context_tokens = t;

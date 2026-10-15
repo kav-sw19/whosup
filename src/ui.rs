@@ -169,6 +169,12 @@ pub fn tokens(n: u64) -> String {
     }
 }
 
+/// Cost, marked `≈` when it was estimated from tokens rather than recorded by the agent.
+pub fn cost_str(c: f64, estimated: bool) -> String {
+    let m = money(c);
+    if estimated && m != "—" { format!("≈{}", m.trim_start_matches('<')) } else { m }
+}
+
 pub fn money(c: f64) -> String {
     let c = c + 0.0; // normalise -0.0
     if c == 0.0 {
@@ -411,6 +417,7 @@ fn header_parts(app: &App) -> HeaderParts {
     let live = sessions.iter().filter(|s| s.live()).count();
     let working = sessions.iter().filter(|s| s.live() && s.t.is_busy()).count();
     let agents: usize = sessions.iter().map(|s| s.running_agents()).sum();
+    let any_estimate = sessions.iter().any(|s| s.live() && s.t.cost_estimated);
     let cost = sessions
         .iter()
         .filter(|s| s.live())
@@ -451,7 +458,7 @@ fn header_parts(app: &App) -> HeaderParts {
         stats.push(sep());
         stats.extend(stat(agents, if agents == 1 { "agent running" } else { "agents running" }, p.violet, "◆"));
         vec![
-            Span::styled(money(cost), Style::new().fg(p.fg).bold()),
+            Span::styled(cost_str(cost, any_estimate), Style::new().fg(p.fg).bold()),
             Span::styled(" spent in live sessions", Style::new().fg(p.muted)),
         ]
     } else {
@@ -673,7 +680,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                         if s.needs_you() { Style::new().fg(st.color).bold() } else { Style::new().fg(st.color) },
                     )),
                     right(ago(s.t.last_ts.or(Some(s.mtime))), Style::new().fg(dim(pal().muted))),
-                    right(money(s.t.cost), Style::new().fg(dim(pal().soft))),
+                    right(cost_str(s.t.cost, s.t.cost_estimated), Style::new().fg(dim(pal().soft))),
                 ]));
             }
             RowRef::Agent(i, j) => {
@@ -699,7 +706,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                         if a.running { ago(a.started) } else { dur(a.started, a.finished) },
                         Style::new().fg(pal().muted),
                     ),
-                    right(money(a.cost), Style::new().fg(pal().muted)),
+                    right(cost_str(a.cost, a.source == AgentSource::ClaudeTask), Style::new().fg(pal().muted)),
                 ]));
             }
             RowRef::Divider => {
@@ -1031,19 +1038,22 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 ("tokens", tokens(s.t.tokens)),
                 ("context", tokens(s.t.context_tokens)),
             ]));
-            if s.tool != Tool::Pi {
-                // only pi records cost in its transcript
-                if !s.agents.is_empty() {
-                    lines.push(stats(&[("agents running", format!("{}/{}", s.running_agents(), s.agents.len()))]));
-                }
-            } else if s.agents.is_empty() {
-                lines.push(stats(&[("spent", money(s.t.cost))]));
+            let est = s.t.cost_estimated;
+            if s.agents.is_empty() {
+                lines.push(stats(&[("spent", cost_str(s.t.cost, est))]));
             } else {
+                let agents_est = s.agents.iter().any(|a| a.source == AgentSource::ClaudeTask);
                 lines.push(stats(&[
-                    ("session", money(s.t.cost)),
-                    ("agents", money(agent_cost)),
+                    ("session", cost_str(s.t.cost, est)),
+                    ("agents", cost_str(agent_cost, agents_est)),
                     ("running", format!("{}/{}", s.running_agents(), s.agents.len())),
                 ]));
+            }
+            if est {
+                lines.push(Line::from(Span::styled(
+                    "≈ estimated from tokens at list prices (price.<model> in the config)",
+                    Style::new().fg(pal().faint),
+                )));
             }
             if let Some(u) = &s.t.last_user {
                 lines.push(Line::default());
@@ -1088,7 +1098,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 ("turns", a.turns.to_string()),
                 ("tools", a.tool_calls.to_string()),
                 ("tokens", tokens(a.tokens)),
-                ("cost", money(a.cost)),
+                ("cost", cost_str(a.cost, a.source == AgentSource::ClaudeTask)),
             ]));
             lines.push(Line::default());
             lines.push(section("Task"));
