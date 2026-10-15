@@ -469,7 +469,7 @@ fn header_parts(app: &App) -> HeaderParts {
             Span::styled(format!(" {label}"), Style::new().fg(p.muted)),
         ]
     };
-    let tab = |label: &str, n: usize, key: &str, active: bool| -> Vec<Span<'static>> {
+    let tab = |label: &str, n: Option<usize>, key: &str, active: bool| -> Vec<Span<'static>> {
         let (fg, bg) = if active { (p.fg, p.select) } else { (p.muted, p.base()) };
         vec![
             Span::styled(format!(" {key} "), Style::new().fg(if active { p.blue } else { p.faint }).bg(bg)),
@@ -477,14 +477,14 @@ fn header_parts(app: &App) -> HeaderParts {
                 label.to_string(),
                 Style::new().fg(fg).bg(bg).add_modifier(if active { Modifier::BOLD } else { Modifier::empty() }),
             ),
-            Span::styled(format!(" {n} "), Style::new().fg(if active { p.soft } else { p.faint }).bg(bg)),
+            Span::styled(n.map(|n| format!(" {n} ")).unwrap_or_else(|| " ".into()), Style::new().fg(if active { p.soft } else { p.faint }).bg(bg)),
         ]
     };
-    let mut tabs = tab("Sessions", live, "1", app.view == View::Sessions);
+    let mut tabs = tab("Sessions", Some(live), "1", app.view == View::Sessions);
     tabs.push(Span::raw(" "));
-    tabs.extend(tab("Terminals", terms.len(), "2", app.view == View::Terminals));
+    tabs.extend(tab("Terminals", Some(terms.len()), "2", app.view == View::Terminals));
     tabs.push(Span::raw(" "));
-    tabs.extend(tab("Usage", app.usage.as_ref().map(|u| u.sessions).unwrap_or(0), "3", app.view == View::Usage));
+    tabs.extend(tab("Usage", None, "3", app.view == View::Usage));
 
     let mut stats = Vec::new();
     let right: Vec<Span> = if app.view == View::Sessions {

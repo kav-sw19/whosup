@@ -1529,7 +1529,7 @@ mod screenshots {
         unsafe { std::env::set_var("HOME", "/Users/you") };
         ui::set_light(light);
         let dir = PathBuf::from("/nonexistent");
-        let mut app = App::new_demo(Scanner::new(dir, 0));
+        let mut app = App::new_demo(Scanner::new(dir, 24 * 3_600_000));
         // creating the app applies the saved theme; the screenshot's theme wins
         app.settings.light = light;
         ui::set_light(light);

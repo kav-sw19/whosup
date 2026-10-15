@@ -50,7 +50,11 @@ fn session(i: usize, d: S) -> Session {
         tool_calls: d.tools,
         cost: d.cost,
         tokens: d.tokens,
-        context_tokens: d.tokens / 14,
+        context_tokens: d.tokens / 40,
+        // a realistic breakdown, so Claude Code and Codex get cost estimates like real sessions
+        in_tokens: d.tokens / 50,
+        cache_read_tokens: d.tokens * 9 / 10,
+        out_tokens: d.tokens / 100,
         last_ts: Some(ago(d.last)),
         last_role: Some(d.state.0.into()),
         last_stop: d.state.1.map(Into::into),
@@ -60,6 +64,12 @@ fn session(i: usize, d: S) -> Session {
         last_text: Some(d.reply.into()),
         ..Transcript::default()
     };
+    let mut t = t;
+    crate::cost::fill(&mut t);
+    if t.daily.is_empty() {
+        let (c, k, e) = (t.cost, t.tokens, t.cost_estimated);
+        t.add_day(t.last_ts, c, k, e);
+    }
     let live = d.tty.is_some() || d.host.is_some();
     Session {
         shared_files: vec![],
