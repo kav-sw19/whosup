@@ -18,7 +18,7 @@ ports they're using. Press `↵` to jump straight to its tab.
 
 ```sh
 brew install kav-sw19/tap/whosup
-whosup --demo   # look around with made-up sessions first
+whosup
 ```
 
 Other ways to install are under [Install](#install).
