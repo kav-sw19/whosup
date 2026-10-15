@@ -425,3 +425,45 @@ fn gemini_and_aider_discovery() {
     assert_eq!(crate::resume::plan(a, None).unwrap().command, "aider --restore-chat-history");
     std::fs::remove_dir_all(&root).ok();
 }
+
+#[test]
+fn spend_per_day() {
+    let snap = scan_fixtures();
+    let get = |t: &str| snap.sessions.iter().find(|s| s.title() == t).unwrap();
+    let pi = get("Add rate limiting");
+    let day = crate::data::day_of(crate::data::parse_ts("2026-10-15T09:00:08.000Z").unwrap());
+    let d = pi.t.daily[&day];
+    assert!((d.cost - 0.08).abs() < 1e-9 && !d.estimated, "{d:?}");
+    // Claude: each reply priced on its own day, adding up to the session's estimate
+    let claude = get("Fix login redirect");
+    let sum: f64 = claude.t.daily.values().map(|d| d.cost).sum();
+    assert!((sum - claude.t.cost).abs() < 1e-9, "{sum} vs {}", claude.t.cost);
+    assert!(claude.t.daily.values().all(|d| d.estimated));
+}
+
+#[test]
+fn usage_report() {
+    use crate::data::Day;
+    let mut snap = crate::demo::snapshot();
+    let today = crate::data::day_of(crate::data::now_ms());
+    for s in snap.sessions.iter_mut() {
+        s.t.daily.clear();
+        s.agents.clear();
+    }
+    let api = snap.sessions.iter().position(|s| s.title() == "Add rate limiting to the public API").unwrap();
+    let web = snap.sessions.iter().position(|s| s.title() == "Migrate auth to OAuth 2.1").unwrap();
+    snap.sessions[api].t.daily.insert(today, Day { cost: 2.0, tokens: 1000, estimated: true });
+    snap.sessions[api].t.daily.insert(today - 10, Day { cost: 1.0, tokens: 500, estimated: true });
+    snap.sessions[web].t.daily.insert(today - 1, Day { cost: 4.0, tokens: 2000, estimated: false });
+    snap.sessions[web].t.daily.insert(today - 40, Day { cost: 100.0, tokens: 1, estimated: false }); // out of range
+    let r = crate::usage::build(&snap.sessions, &|c: &str| c.to_string(), today, 30);
+    assert_eq!(r.days.len(), 30);
+    assert_eq!((r.today.cost, r.today.tokens), (2.0, 1000));
+    assert_eq!(r.week.cost, 6.0);
+    assert_eq!(r.total.cost, 7.0);
+    assert!(r.total.estimated);
+    assert_eq!(r.sessions, 2);
+    assert_eq!(r.by_agent[0].label, "pi");
+    assert_eq!((r.by_agent[0].cost, r.by_agent[1].label.as_str(), r.by_agent[1].cost), (4.0, "claude", 3.0));
+    assert!(r.by_project.iter().any(|g| g.label.ends_with("code/api") && g.cost == 3.0));
+}

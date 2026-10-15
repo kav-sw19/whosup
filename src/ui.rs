@@ -3,6 +3,7 @@
 use crate::data::{now_ms, Agent, AgentSource, Session};
 use crate::providers::Tool;
 use crate::terms::Terminal;
+use crate::usage::Group;
 use crate::{App, RowRef, View};
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Margin, Rect},
@@ -163,7 +164,9 @@ pub fn dur(a: Option<i64>, b: Option<i64>) -> String {
 }
 
 pub fn tokens(n: u64) -> String {
-    if n >= 1_000_000 {
+    if n >= 1_000_000_000 {
+        format!("{:.1}B", n as f64 / 1e9)
+    } else if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1e6)
     } else if n >= 1000 {
         format!("{:.1}k", n as f64 / 1e3)
@@ -421,7 +424,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(body)
     };
-    if app.convo.is_some() {
+    if app.view == View::Usage {
+        draw_usage(f, app, body);
+    } else if app.convo.is_some() {
         draw_convo(f, app, body);
     } else {
         if app.view == View::Terminals {
@@ -478,6 +483,8 @@ fn header_parts(app: &App) -> HeaderParts {
     let mut tabs = tab("Sessions", live, "1", app.view == View::Sessions);
     tabs.push(Span::raw(" "));
     tabs.extend(tab("Terminals", terms.len(), "2", app.view == View::Terminals));
+    tabs.push(Span::raw(" "));
+    tabs.extend(tab("Usage", app.usage.as_ref().map(|u| u.sessions).unwrap_or(0), "3", app.view == View::Usage));
 
     let mut stats = Vec::new();
     let right: Vec<Span> = if app.view == View::Sessions {
@@ -572,6 +579,145 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     if lw + rw + 2 <= avail {
         f.render_widget(Line::from(right).alignment(Alignment::Right), area);
     }
+}
+
+/// Paths keep their last folders (`…/VixtaAI/viksta-ai`); other labels keep their end, which is
+/// what tells similar model names apart (`…v4-flash-0731`).
+fn fit_label(label: &str, max: usize) -> String {
+    if label.chars().count() <= max {
+        return label.to_string();
+    }
+    if label.contains('/') {
+        return short_path(label, max);
+    }
+    let tail: String = label.chars().rev().take(max.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("…{tail}")
+}
+
+/// The Usage tab: totals, a daily chart, and spend by agent, model and project.
+fn draw_usage(f: &mut Frame, app: &App, area: Rect) {
+    let p = pal();
+    let Some(u) = app.usage.as_ref() else {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled("Adding up usage…", Style::new().fg(p.muted)))).block(panel(title_line("Usage", None), true)),
+            area,
+        );
+        return;
+    };
+    let money_d = |d: &crate::data::Day| cost_str(d.cost, d.estimated);
+    let summary = Line::from(vec![
+        Span::styled(" today ", Style::new().fg(p.muted)),
+        Span::styled(money_d(&u.today), Style::new().fg(p.fg).bold()),
+        Span::styled(format!(" · {} tokens", tokens(u.today.tokens)), Style::new().fg(p.muted)),
+        Span::styled("      last 7 days ", Style::new().fg(p.muted)),
+        Span::styled(money_d(&u.week), Style::new().fg(p.fg).bold()),
+        Span::styled(format!(" · {} tokens", tokens(u.week.tokens)), Style::new().fg(p.muted)),
+        Span::styled(format!("      last {} days ", u.range_days), Style::new().fg(p.muted)),
+        Span::styled(money_d(&u.total), Style::new().fg(p.fg).bold()),
+        Span::styled(format!(" · {} tokens · {} sessions", tokens(u.total.tokens), u.sessions), Style::new().fg(p.muted)),
+    ]);
+    let [top, chart_area, lists] =
+        Layout::vertical([Constraint::Length(2), Constraint::Length(12), Constraint::Min(4)]).areas(area);
+    f.render_widget(Paragraph::new(vec![summary]), top);
+
+    // daily bars: eighth-blocks for resolution, newest on the right
+    let block = panel(title_line("Spend per day", Some(Span::styled(format!("last {} days", u.range_days), Style::new().fg(p.muted)))), true);
+    let inner = block.inner(chart_area);
+    f.render_widget(block, chart_area);
+    let h = inner.height.saturating_sub(2).max(1) as usize;
+    let n = u.days.len().max(1);
+    // as wide as the panel allows: one or more columns per day, a one-column gap when there's room
+    let col_w = ((inner.width as usize).saturating_sub(10) / n).clamp(1, 8);
+    let max = u.days.iter().map(|(_, d)| d.cost).fold(0.0, f64::max);
+    let eighths = ["", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    let mut rows: Vec<Line> = Vec::new();
+    for row in 0..h {
+        let level_from_top = h - row; // this row covers heights (level-1, level]
+        let mut spans = vec![Span::styled(
+            if row == 0 { format!("{:>8} ", money(max)) } else { " ".repeat(9) },
+            Style::new().fg(p.faint),
+        )];
+        for (i, (_, d)) in u.days.iter().enumerate() {
+            let frac = if max > 0.0 { d.cost / max * h as f64 } else { 0.0 };
+            let full = frac.floor() as usize;
+            let cell = if level_from_top <= full {
+                "█".to_string()
+            } else if level_from_top == full + 1 {
+                eighths[((frac - full as f64) * 8.0).round() as usize].to_string()
+            } else {
+                String::new()
+            };
+            let color = if i + 1 == n { p.blue } else if d.estimated { p.violet } else { p.teal };
+            spans.push(Span::styled(format!("{:<w$}", cell.repeat(col_w.saturating_sub(1).max(1)), w = col_w), Style::new().fg(color)));
+        }
+        rows.push(Line::from(spans));
+    }
+    // date labels: first, middle and today
+    let label = |day: i64| crate::export::format_time(day * 86_400_000, 0)[5..10].to_string();
+    let mut axis = format!("{:9}", "");
+    if let (Some((first, _)), Some((last, _))) = (u.days.first(), u.days.last()) {
+        let width = n * col_w;
+        let mid = u.days[n / 2].0;
+        let mut line = vec![' '; width];
+        for (pos, text) in [(0usize, label(*first)), ((n / 2) * col_w, label(mid)), (width.saturating_sub(5), "today".to_string())] {
+            for (k, ch) in text.chars().enumerate() {
+                if pos + k < width {
+                    line[pos + k] = ch;
+                }
+            }
+        }
+        axis.push_str(&line.into_iter().collect::<String>());
+        let _ = last;
+    }
+    rows.push(Line::from(Span::styled(axis, Style::new().fg(p.faint))));
+    rows.push(Line::from(vec![
+        Span::styled(format!("{:9}", ""), Style::new()),
+        Span::styled("█", Style::new().fg(p.teal)),
+        Span::styled(" recorded   ", Style::new().fg(p.muted)),
+        Span::styled("█", Style::new().fg(p.violet)),
+        Span::styled(" includes estimates (≈)   ", Style::new().fg(p.muted)),
+        Span::styled("█", Style::new().fg(p.blue)),
+        Span::styled(" today", Style::new().fg(p.muted)),
+    ]));
+    f.render_widget(Paragraph::new(rows), inner);
+
+    // breakdowns
+    let cols = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(30), Constraint::Percentage(40)]).spacing(1).split(lists);
+    let list = |title: &str, groups: &[Group], color_of: &dyn Fn(&str) -> Color, area: Rect, f: &mut Frame| {
+        let block = panel(title_line(title, None), false);
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        let top = groups.iter().map(|g| g.cost).fold(0.0, f64::max);
+        let label_w = (inner.width as usize * 2 / 5).clamp(8, 30);
+        let bar_w = (inner.width as usize).saturating_sub(label_w + 18).max(4);
+        let lines: Vec<Line> = groups
+            .iter()
+            .take(inner.height as usize)
+            .map(|g| {
+                let filled = if top > 0.0 { ((g.cost / top) * bar_w as f64).round() as usize } else { 0 };
+                Line::from(vec![
+                    Span::styled(format!("{:<label_w$}", fit_label(&g.label, label_w.saturating_sub(1))), Style::new().fg(color_of(&g.label))),
+                    Span::styled("━".repeat(filled.max(if g.cost > 0.0 { 1 } else { 0 })), Style::new().fg(color_of(&g.label))),
+                    Span::styled(" ".repeat(bar_w - filled.min(bar_w)), Style::new()),
+                    Span::styled(format!("{:>8}", cost_str(g.cost, g.estimated)), Style::new().fg(p.fg).bold()),
+                    Span::styled(format!(" {:>6}", tokens(g.tokens)), Style::new().fg(p.muted)),
+                ])
+            })
+            .collect();
+        f.render_widget(Paragraph::new(lines), inner);
+    };
+    let agent_color = |l: &str| match l {
+        "pi" => tool_color(Tool::Pi),
+        "claude" => tool_color(Tool::Claude),
+        "codex" => tool_color(Tool::Codex),
+        "opencode" => tool_color(Tool::Opencode),
+        "gemini" => tool_color(Tool::Gemini),
+        "aider" => tool_color(Tool::Aider),
+        _ => p.soft,
+    };
+    list("By agent", &u.by_agent, &agent_color, cols[0], f);
+    list("By model", &u.by_model, &|_| p.soft, cols[1], f);
+    list("By project", &u.by_project, &|_| p.soft, cols[2], f);
 }
 
 /// The whole conversation, newest at the bottom.
@@ -761,6 +907,12 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("x", "stop", None, 7),
             ("N", "new", None, 6),
             ("n", "notify", Some(app.settings.notify), 4),
+            ("t", "theme", None, 5),
+            ("q", "quit", None, 0),
+        ],
+        View::Usage => vec![
+            ("tab", "sessions", None, 1),
+            ("a", if app.usage_days == 7 { "7 days" } else if app.usage_days == 30 { "30 days" } else { "90 days" }, Some(true), 1),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),
         ],

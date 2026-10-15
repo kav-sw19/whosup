@@ -68,6 +68,13 @@ an agent, sends anything over the network, or changes a file.
   almost nothing after the first read.
 - **Scriptable.** `whosup --once` prints a plain-text snapshot instead of opening the UI.
 
+### The Usage tab
+
+Spend and tokens for today, the last 7 days and the last 7, 30 or 90 days (`a` switches), with a
+daily chart and breakdowns by agent, model and project. pi's recorded cost is used as is; Claude
+Code and Codex replies are priced as they happen (shown with `≈`); opencode, Gemini CLI and aider
+sessions count on the day of their last activity.
+
 ### The Terminals tab
 
 <img alt="whosup's Terminals tab: five terminals, two running agents, with their CPU and memory" src="docs/whosup-terminals.png">
@@ -106,7 +113,7 @@ whosup --interrupt ttys003  # press Esc in that tty's tab
 | Key | Action |
 | --- | --- |
 | `/` | Search: every word must match the title, folder, agent, model, first prompt or a sub-agent's task (`↵` keeps it, `esc` clears it) |
-| `tab` · `1` · `2` | Switch between Sessions and Terminals |
+| `tab` · `1` · `2` · `3` | Switch between Sessions, Terminals and Usage |
 | `↑` `↓` · `j` `k` | Move the selection (`PgUp` / `PgDn`, `g` / `G` jump) |
 | `←` `→` · `h` `l` | Collapse or expand a session's sub-agents (closed sessions start collapsed) |
 | `↵` | Live session or terminal: bring its tab to the front. Closed session: resume it |

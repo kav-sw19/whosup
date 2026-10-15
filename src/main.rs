@@ -1,6 +1,7 @@
 mod cost;
 mod convo;
 mod data;
+mod usage;
 mod watch;
 mod more_agents;
 mod opencode;
@@ -43,7 +44,7 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
   --watch    no window: just send notifications (and remember where sessions ran)
   --install-service    run --watch at login (a launchd agent); --uninstall-service removes it
 
-KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
+KEYS: / search · tab/1/2/3 sessions·terminals·usage · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details
       a history: live only → recent → 7 days → all · p group by project · v read the conversation
       y copy (r resume command, i id, f file, d folder, l last reply) · e export to Markdown
@@ -106,6 +107,7 @@ pub struct GroupInfo {
 pub enum View {
     Sessions,
     Terminals,
+    Usage,
 }
 
 pub enum Target {
@@ -177,7 +179,10 @@ pub struct App {
     focus_tx: mpsc::Sender<Result<String, String>>,
     focus_rx: mpsc::Receiver<Result<String, String>>,
     /// selection remembered per view
-    saved_sel: [Option<String>; 2],
+    saved_sel: [Option<String>; 3],
+    /// the Usage tab: days shown (7, 30 or 90) and the report
+    pub usage_days: i64,
+    pub usage: Option<usage::Report>,
     scanner: Scanner,
     snap: Snapshot,
     show_recent: bool,
@@ -323,7 +328,9 @@ impl App {
             flash: None,
             focus_tx,
             focus_rx,
-            saved_sel: [None, None],
+            saved_sel: [None, None, None],
+            usage_days: 30,
+            usage: None,
             scanner,
             snap: Snapshot { sessions: vec![], orphan_procs: vec![], terminals: vec![] },
             show_recent: false,
@@ -546,6 +553,9 @@ impl App {
 
     fn rebuild_rows(&mut self) {
         let mut rows = Vec::new();
+        if self.view == View::Usage {
+            return self.finish_rows(rows);
+        }
         if self.view == View::Terminals {
             let words = self.query_words();
             for (i, t) in self.snap.terminals.iter().enumerate() {
@@ -663,6 +673,9 @@ impl App {
         if let Some(v) = self.convo.as_mut() {
             v.reload_if_changed();
         }
+        if self.view == View::Usage && !self.demo {
+            self.build_usage();
+        }
         if self.demo {
             self.snap = demo::snapshot();
             self.rebuild_rows();
@@ -733,6 +746,31 @@ impl App {
         self.state.selected().and_then(|i| self.rows.get(i)).map(|(_, r)| r)
     }
 
+    /// Recompute the Usage report (loading enough history to cover its range).
+    fn build_usage(&mut self) {
+        let need = self.usage_days * 24 * 3_600_000;
+        if self.scanner.recent_window_ms < need {
+            self.scanner.recent_window_ms = need;
+            self.snap = self.scanner.scan();
+        }
+        let roots: std::collections::HashMap<String, String> = self
+            .snap
+            .sessions
+            .iter()
+            .map(|s| s.t.cwd.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .map(|c| (c.clone(), self.project_of(&c)))
+            .collect();
+        let project = |c: &str| roots.get(c).cloned().unwrap_or_else(|| c.to_string());
+        let sessions: Vec<Session> = self.snap.sessions.iter().filter(|s| !self.settings.hides(s.tool.label())).cloned().collect();
+        self.usage = Some(usage::build(&sessions, &project, data::day_of(data::now_ms()), self.usage_days));
+        // the numbers are in: drop the "adding up" message
+        if self.flash.as_ref().is_some_and(|f| f.text.ends_with('…') && (f.text.starts_with("Adding up") || f.text.starts_with("Usage over"))) {
+            self.flash = None;
+        }
+    }
+
     fn set_view(&mut self, v: View) {
         if v == self.view {
             return;
@@ -742,6 +780,10 @@ impl App {
         self.selected_key = self.saved_sel[v as usize].clone();
         self.state.select(Some(0));
         self.detail_scroll = 0;
+        if v == View::Usage {
+            self.flash("Adding up usage…", false);
+            self.refresh_soon = true;
+        }
         self.rebuild_rows();
     }
 
@@ -1059,9 +1101,31 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     KeyCode::Right | KeyCode::Char('l') => app.set_collapsed(false),
                     KeyCode::Enter => app.activate(),
                     KeyCode::Char('s') if app.view == View::Terminals => app.show_session(),
-                    KeyCode::Tab | KeyCode::BackTab => {
-                        let v = if app.view == View::Sessions { View::Terminals } else { View::Sessions };
+                    KeyCode::Tab => {
+                        let v = match app.view {
+                            View::Sessions => View::Terminals,
+                            View::Terminals => View::Usage,
+                            View::Usage => View::Sessions,
+                        };
                         app.set_view(v)
+                    }
+                    KeyCode::BackTab => {
+                        let v = match app.view {
+                            View::Sessions => View::Usage,
+                            View::Terminals => View::Sessions,
+                            View::Usage => View::Terminals,
+                        };
+                        app.set_view(v)
+                    }
+                    KeyCode::Char('3') => app.set_view(View::Usage),
+                    KeyCode::Char('a') if app.view == View::Usage => {
+                        app.usage_days = match app.usage_days {
+                            7 => 30,
+                            30 => 90,
+                            _ => 7,
+                        };
+                        app.flash(format!("Usage over {} days…", app.usage_days), false);
+                        app.refresh_soon = true;
                     }
                     KeyCode::Char('1') => app.set_view(View::Sessions),
                     KeyCode::Char('2') => app.set_view(View::Terminals),
@@ -1276,6 +1340,10 @@ mod render_test {
         app.rebuild_rows();
         if env("WHOSUP_VIEW").as_deref() == Some("terminals") {
             app.set_view(View::Terminals);
+        }
+        if env("WHOSUP_VIEW").as_deref() == Some("usage") {
+            app.set_view(View::Usage);
+            app.refresh();
         }
         if env("WHOSUP_GROUP").is_some() {
             app.group = true;

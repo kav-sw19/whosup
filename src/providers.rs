@@ -219,6 +219,19 @@ impl Transcript {
                     self.last_tool = None;
                     if let Some(u) = m.get("usage") {
                         let g = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+                        // priced per reply, so the Usage tab can put it on the right day
+                        let price = s(m, "/model").and_then(crate::cost::price_for);
+                        let cost = price
+                            .map(|p| {
+                                (g("input_tokens") as f64 * p.input
+                                    + g("output_tokens") as f64 * p.output
+                                    + g("cache_read_input_tokens") as f64 * p.cache_read
+                                    + g("cache_creation_input_tokens") as f64 * p.cache_write)
+                                    / 1e6
+                            })
+                            .unwrap_or(0.0);
+                        let tokens = g("input_tokens") + g("output_tokens") + g("cache_read_input_tokens") + g("cache_creation_input_tokens");
+                        self.add_day(ts, cost, tokens, true);
                         self.in_tokens += g("input_tokens");
                         self.out_tokens += g("output_tokens");
                         self.cache_read_tokens += g("cache_read_input_tokens");
@@ -339,10 +352,24 @@ impl Transcript {
                         }
                         if let Some(u) = p.pointer("/info/total_token_usage") {
                             let g = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
-                            // Codex counts cached input inside input_tokens
-                            self.cache_read_tokens = g("cached_input_tokens");
-                            self.in_tokens = g("input_tokens").saturating_sub(self.cache_read_tokens);
-                            self.out_tokens = g("output_tokens");
+                            // Codex counts cached input inside input_tokens; totals are cumulative,
+                            // so the growth since the last count is what this moment used
+                            let (cr, inp, out) = (g("cached_input_tokens"), g("input_tokens").saturating_sub(g("cached_input_tokens")), g("output_tokens"));
+                            let (d_cr, d_in, d_out) = (
+                                cr.saturating_sub(self.cache_read_tokens),
+                                inp.saturating_sub(self.in_tokens),
+                                out.saturating_sub(self.out_tokens),
+                            );
+                            let cost = self
+                                .model
+                                .as_deref()
+                                .and_then(crate::cost::price_for)
+                                .map(|p| (d_in as f64 * p.input + d_out as f64 * p.output + d_cr as f64 * p.cache_read) / 1e6)
+                                .unwrap_or(0.0);
+                            self.add_day(ts, cost, d_cr + d_in + d_out, true);
+                            self.cache_read_tokens = cr;
+                            self.in_tokens = inp;
+                            self.out_tokens = out;
                         }
                         if let Some(t) = p.pointer("/info/last_token_usage/total_tokens").and_then(Value::as_u64) {
                             self.context_tokens = t;

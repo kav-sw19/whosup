@@ -92,6 +92,20 @@ pub struct AgentMeta {
     pub finished_at: Option<i64>,
 }
 
+/// One day's spend and tokens.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Day {
+    pub cost: f64,
+    pub tokens: u64,
+    /// some of the cost was estimated from tokens
+    pub estimated: bool,
+}
+
+/// Local day number (days since 1970-01-01 in local time).
+pub fn day_of(ms: i64) -> i64 {
+    (ms / 1000 + crate::export::local_offset()).div_euclid(86_400)
+}
+
 /// Incrementally-parsed transcript summary.
 #[derive(Clone, Debug, Default)]
 pub struct Transcript {
@@ -146,6 +160,8 @@ pub struct Transcript {
     pub parent_thread: Option<String>,
     /// Codex: wait_agent / interrupt_agent calls awaiting output: (call id, agent named)
     pub(crate) pending_wait: Vec<(String, String)>,
+    /// spend and tokens per local day (day number since 1970), for the Usage tab
+    pub daily: std::collections::BTreeMap<i64, Day>,
     /// this file is itself a sub-agent transcript (keep sidechain lines)
     pub(crate) sidechain_file: bool,
 }
@@ -235,10 +251,12 @@ impl Transcript {
                             self.model = Some(model.into());
                         }
                         if let Some(u) = m.get("usage") {
-                            self.cost += u.pointer("/cost/total").and_then(Value::as_f64).unwrap_or(0.0);
+                            let cost = u.pointer("/cost/total").and_then(Value::as_f64).unwrap_or(0.0);
+                            self.cost += cost;
                             let tot = u.get("totalTokens").and_then(Value::as_u64).unwrap_or(0);
                             self.tokens += tot;
                             self.context_tokens = tot;
+                            self.add_day(ts, cost, tot, false);
                         }
                         if let Some(parts) = m.get("content").and_then(Value::as_array) {
                             let calls: Vec<&Value> =
@@ -263,6 +281,15 @@ impl Transcript {
             }
             _ => {}
         }
+    }
+
+    /// Add spend and tokens to the day of `ts`.
+    pub(crate) fn add_day(&mut self, ts: Option<i64>, cost: f64, tokens: u64, estimated: bool) {
+        let Some(ts) = ts.or(self.last_ts).or(self.started) else { return };
+        let d = self.daily.entry(day_of(ts)).or_default();
+        d.cost += cost;
+        d.tokens += tokens;
+        d.estimated |= estimated && cost > 0.0;
     }
 
     /// Record a tool call, counting identical calls in a row (a loop).
@@ -1113,6 +1140,10 @@ impl Scanner {
         for oc in top {
             let mut t = oc.t;
             crate::cost::fill(&mut t);
+            if t.daily.is_empty() {
+                let (c, k, e) = (t.cost, t.tokens, t.cost_estimated);
+                t.add_day(t.last_ts, c, k, e);
+            }
             let path = crate::opencode::path_for(&oc.id);
             sessions.push(Session {
                 shared_files: vec![],
@@ -1169,6 +1200,10 @@ impl Scanner {
             let hashes = hashes.clone();
             for (mut t, mtime) in self.whole_file(&f, move |text, mt| ma::gemini_transcript(text, &hashes).map(|t| vec![(t, mt)]).unwrap_or_default()) {
                 crate::cost::fill(&mut t);
+                if t.daily.is_empty() {
+                    let (c, k, e) = (t.cost, t.tokens, t.cost_estimated);
+                    t.add_day(t.last_ts, c, k, e);
+                }
                 sessions.push(Session::from_transcript(Tool::Gemini, f.clone(), t, mtime));
             }
         }
@@ -1200,6 +1235,10 @@ impl Scanner {
                     continue;
                 }
                 crate::cost::fill(&mut t);
+                if t.daily.is_empty() {
+                    let (c, k, e) = (t.cost, t.tokens, t.cost_estimated);
+                    t.add_day(t.last_ts, c, k, e);
+                }
                 let path = ma::aider_path(&file, t.started.unwrap_or(0));
                 sessions.push(Session::from_transcript(Tool::Aider, path, t, mtime));
             }
