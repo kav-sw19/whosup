@@ -435,6 +435,7 @@ impl App {
                 let tool = match a.source {
                     data::AgentSource::Chalking => providers::Tool::Pi,
                     data::AgentSource::ClaudeTask => providers::Tool::Claude,
+                    data::AgentSource::CodexAgent => providers::Tool::Codex,
                     data::AgentSource::PiSubagents => return self.flash("This background run has no transcript to show", true),
                 };
                 let Some(p) = a.path.clone() else { return self.flash("No transcript for this agent", true) };
@@ -1545,7 +1546,7 @@ mod history_tests {
         };
         // the fixture files are older than a second, so a 1 ms window loads none of them
         assert_eq!(scan(1), 0);
-        assert_eq!(scan(i64::MAX / 4), 4);
+        assert_eq!(scan(i64::MAX / 4), 5);
         std::fs::remove_dir_all(&fixtures).ok();
     }
 }

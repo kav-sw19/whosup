@@ -76,7 +76,52 @@ fn is_human_text(t: &str) -> bool {
     !t.is_empty() && !t.starts_with('<') && !t.starts_with("Caveat:")
 }
 
+/// Arguments may arrive as a JSON string.
+fn args_obj(args: &Value) -> Value {
+    match args {
+        Value::String(x) => serde_json::from_str(x).unwrap_or(Value::Null),
+        other => other.clone(),
+    }
+}
+
+fn first_str(v: &Value, keys: &[&str]) -> String {
+    keys.iter().find_map(|k| v.get(*k).and_then(Value::as_str)).unwrap_or("").to_string()
+}
+
 impl Transcript {
+    /// Codex multi-agent tools: `spawn_agent` starts one; `wait_agent` / `interrupt_agent`
+    /// (naming it, or its spawn call) end it.
+    fn note_codex_collab(&mut self, name: &str, call_id: &str, args: &Value, ts: Option<i64>) {
+        let a = args_obj(args);
+        match name {
+            "spawn_agent" => self.codex_spawns.push(crate::data::CodexSpawn {
+                call_id: call_id.to_string(),
+                name: first_str(&a, &["task_name", "name", "agent_name", "agent", "path", "id"]),
+                task: first_str(&a, &["message", "task", "prompt", "instructions", "description"]),
+                started: ts,
+                ..Default::default()
+            }),
+            "wait_agent" | "interrupt_agent" => {
+                let target = first_str(&a, &["task_name", "name", "agent_name", "agent", "path", "id", "target"]);
+                // remember which agent this call is about, so its output can finish it
+                self.pending_wait.push((call_id.to_string(), target));
+            }
+            _ => {}
+        }
+    }
+
+    fn note_codex_collab_output(&mut self, call_id: &str, out: &str, ts: Option<i64>) {
+        if let Some(i) = self.pending_wait.iter().position(|(c, _)| c == call_id) {
+            let (_, target) = self.pending_wait.remove(i);
+            for sp in self.codex_spawns.iter_mut().filter(|sp| sp.finished.is_none()) {
+                if target.is_empty() || sp.name == target || target.ends_with(&format!("/{}", sp.name)) || sp.call_id == target {
+                    sp.finished = ts;
+                    sp.result = Some(clip(out));
+                }
+            }
+        }
+    }
+
     fn note_user_text(&mut self, text: &str) {
         self.user_msgs += 1;
         if is_human_text(text) {
@@ -228,6 +273,16 @@ impl Transcript {
                 self.started = s(p, "/timestamp").and_then(parse_ts).or(ts);
                 self.origin = s(p, "/originator").map(Into::into);
                 self.entrypoint = s(p, "/source").map(Into::into);
+                // a sub-agent thread: not started by you, and naming its parent
+                let by_user = matches!(s(p, "/thread_source"), None | Some("user"));
+                if !by_user {
+                    if let Some(obj) = p.as_object() {
+                        self.parent_thread = obj
+                            .iter()
+                            .filter(|(k, _)| k.contains("parent") || k.contains("spawned_by") || k.contains("forked_from"))
+                            .find_map(|(_, v)| v.as_str().map(String::from));
+                    }
+                }
             }
             "turn_context" => {
                 if let Some(m) = s(p, "/model") {
@@ -334,6 +389,7 @@ impl Transcript {
                         let name = s(p, "/name").unwrap_or_else(|| s(p, "/type").unwrap_or("tool"));
                         let args = p.get("arguments").or(p.get("input")).or(p.get("action")).cloned().unwrap_or(Value::Null);
                         self.note_call(name, &args);
+                        self.note_codex_collab(name, s(p, "/call_id").unwrap_or(""), &args, ts);
                         self.last_tool = Some(name.trim_end_matches("_call").into());
                         self.last_role = Some("assistant".into());
                         self.last_stop = Some("toolUse".into());
@@ -341,6 +397,12 @@ impl Transcript {
                     "function_call_output" | "custom_tool_call_output" | "local_shell_call_output" => {
                         self.last_role = Some("toolResult".into());
                         self.approval_requested = false;
+                        let out = match p.get("output") {
+                            Some(Value::String(x)) => x.clone(),
+                            Some(o) => o.to_string(),
+                            None => String::new(),
+                        };
+                        self.note_codex_collab_output(s(p, "/call_id").unwrap_or(""), &out, ts);
                     }
                     _ => {}
                 }

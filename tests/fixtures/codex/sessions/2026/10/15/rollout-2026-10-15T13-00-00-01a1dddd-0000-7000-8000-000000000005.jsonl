@@ -1,0 +1,10 @@
+{"timestamp":"2026-10-15T12:00:00.000Z","type":"session_meta","payload":{"id":"01a1dddd-0000-7000-8000-000000000005","timestamp":"2026-10-15T12:00:00.000Z","cwd":"/Users/you/code/shop","originator":"codex_cli_rs","source":"cli","thread_source":"user"}}
+{"timestamp":"2026-10-15T12:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","model_context_window":258400}}
+{"timestamp":"2026-10-15T12:00:01.100Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/Users/you/code/shop","model":"gpt-6-sol"}}
+{"timestamp":"2026-10-15T12:00:01.300Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"audit the payment flow"}]}}
+{"timestamp":"2026-10-15T12:00:03.000Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"task_name\":\"webhooks\",\"message\":\"Check every webhook handler retries safely\"}","call_id":"s1"}}
+{"timestamp":"2026-10-15T12:00:03.100Z","type":"response_item","payload":{"type":"function_call_output","call_id":"s1","output":"spawned /root/webhooks"}}
+{"timestamp":"2026-10-15T12:00:04.000Z","type":"response_item","payload":{"type":"function_call","name":"spawn_agent","arguments":"{\"task_name\":\"refunds\",\"message\":\"Trace a refund end to end\"}","call_id":"s2"}}
+{"timestamp":"2026-10-15T12:00:04.100Z","type":"response_item","payload":{"type":"function_call_output","call_id":"s2","output":"spawned /root/refunds"}}
+{"timestamp":"2026-10-15T12:01:00.000Z","type":"response_item","payload":{"type":"function_call","name":"wait_agent","arguments":"{\"task_name\":\"/root/webhooks\"}","call_id":"w1"}}
+{"timestamp":"2026-10-15T12:02:00.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"w1","output":"All 4 handlers are idempotent; one lacks a retry limit."}}

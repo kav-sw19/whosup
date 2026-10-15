@@ -361,3 +361,21 @@ fn export_markdown() {
     assert!(md.contains("- ⚙ **edit** `src/router.rs`"));
     assert!(md.contains("## pi · 2026-10-15 09:00\n\nRate limiting is in place on /v1.\n"), "{md}");
 }
+
+#[test]
+fn codex_sub_agents() {
+    let snap = scan_fixtures();
+    // the child thread is shown under its parent, not on its own
+    assert!(!snap.sessions.iter().any(|s| s.title() == "refunds"), "child thread nested");
+    let parent = snap.sessions.iter().find(|s| s.title() == "audit the payment flow").unwrap();
+    let names: Vec<(&str, &str)> = parent.agents.iter().map(|a| (a.agent.as_str(), a.status.as_str())).collect();
+    // refunds: from its own thread (done); webhooks: from spawn_agent + wait_agent (done)
+    assert!(names.contains(&("refunds", "done")), "{names:?}");
+    let webhooks = parent.agents.iter().find(|a| a.id == "webhooks").expect("spawned agent");
+    assert_eq!(webhooks.status, "done");
+    assert_eq!(webhooks.task, "Check every webhook handler retries safely");
+    assert!(webhooks.last_text.as_deref().unwrap_or("").contains("idempotent"));
+    let refunds = parent.agents.iter().find(|a| a.agent == "refunds").unwrap();
+    assert_eq!(refunds.model, "gpt-6-luna");
+    assert_eq!(parent.agents.len(), 2, "the refunds spawn and its thread are one agent");
+}

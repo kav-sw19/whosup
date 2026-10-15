@@ -140,6 +140,12 @@ pub struct Transcript {
     pub call_repeats: u32,
     /// files this session wrote: (absolute path, when), most recent last
     pub files: Vec<(String, i64)>,
+    /// Codex: sub-agents this thread spawned
+    pub codex_spawns: Vec<CodexSpawn>,
+    /// Codex: this thread is itself a sub-agent of the thread with this id
+    pub parent_thread: Option<String>,
+    /// Codex: wait_agent / interrupt_agent calls awaiting output: (call id, agent named)
+    pub(crate) pending_wait: Vec<(String, String)>,
     /// this file is itself a sub-agent transcript (keep sidechain lines)
     pub(crate) sidechain_file: bool,
 }
@@ -423,6 +429,19 @@ pub enum AgentSource {
     Chalking,
     PiSubagents,
     ClaudeTask,
+    /// Codex multi-agent: `spawn_agent` calls, or a child thread naming this one as parent
+    CodexAgent,
+}
+
+/// A sub-agent a Codex thread started with `spawn_agent`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CodexSpawn {
+    pub call_id: String,
+    pub name: String,
+    pub task: String,
+    pub started: Option<i64>,
+    pub finished: Option<i64>,
+    pub result: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -631,6 +650,69 @@ pub fn stuck_reason(t: &Transcript, live: bool, now: i64, after_ms: i64) -> Opti
         return Some(format!("stuck? {what} {dur}"));
     }
     None
+}
+
+/// Codex sub-agents: `spawn_agent` calls in the thread, plus child threads that name it as
+/// their parent (those carry their own transcript, so they show status, model and cost).
+fn codex_agents(s: &Session, parent_live: bool, children: &[Session]) -> Vec<Agent> {
+    let now = now_ms();
+    let mut out: Vec<Agent> = Vec::new();
+    for c in children.iter().filter(|c| c.t.parent_thread.as_deref() == Some(s.t.id.as_str())) {
+        let running = parent_live && (c.t.is_busy() || now - c.mtime < 15 * 60_000) && c.t.last_stop.as_deref() != Some("stop");
+        let status = if running { "running" } else if c.t.last_stop.as_deref() == Some("stop") { "done" } else { "stale" };
+        out.push(Agent {
+            key: format!("codex:{}", c.path.display()),
+            id: c.t.id.chars().take(8).collect(),
+            agent: c.t.name.clone().unwrap_or_else(|| "agent".into()),
+            source: AgentSource::CodexAgent,
+            status: status.into(),
+            running,
+            task: c.t.first_user.clone().unwrap_or_default(),
+            model: c.t.model.clone().unwrap_or_default(),
+            effort: c.t.thinking.clone().unwrap_or_default(),
+            activity: if running { c.t.activity() } else { status.into() },
+            started: c.t.started,
+            finished: if running { None } else { c.t.last_ts },
+            last_activity: c.t.last_ts,
+            turns: c.t.turns,
+            tool_calls: c.t.tool_calls,
+            tokens: c.t.tokens,
+            cost: c.t.cost,
+            last_text: c.t.last_text.clone(),
+            path: Some(c.path.clone()),
+        });
+    }
+    for sp in &s.t.codex_spawns {
+        // a child thread already describes this agent
+        if out.iter().any(|a| a.agent == sp.name && !sp.name.is_empty()) {
+            continue;
+        }
+        let done = sp.finished.is_some();
+        let running = !done && parent_live;
+        let status = if done { "done" } else if running { "running" } else { "stale" };
+        out.push(Agent {
+            key: format!("codex-spawn:{}:{}", s.key, sp.call_id),
+            id: if sp.name.is_empty() { sp.call_id.chars().take(8).collect() } else { sp.name.clone() },
+            agent: "agent".into(),
+            source: AgentSource::CodexAgent,
+            status: status.into(),
+            running,
+            task: sp.task.clone(),
+            model: String::new(),
+            effort: String::new(),
+            activity: status.into(),
+            started: sp.started,
+            finished: sp.finished,
+            last_activity: sp.finished.or(sp.started),
+            turns: 0,
+            tool_calls: 0,
+            tokens: 0,
+            cost: 0.0,
+            last_text: sp.result.clone(),
+            path: None,
+        });
+    }
+    out
 }
 
 /// What whosup can see about a live Claude Code or Codex session's last tool request.
@@ -1200,12 +1282,26 @@ impl Scanner {
         }
 
         // 3. agents
+        // Codex child threads that name their parent are shown under it, not on their own
+        let mut codex_children: Vec<Session> = Vec::new();
+        let ids: HashSet<String> = sessions.iter().map(|s| s.t.id.clone()).collect();
+        let mut i = 0;
+        while i < sessions.len() {
+            let is_child = sessions[i].tool == Tool::Codex
+                && sessions[i].t.parent_thread.as_ref().map(|p| ids.contains(p)).unwrap_or(false);
+            if is_child {
+                codex_children.push(sessions.remove(i));
+            } else {
+                i += 1;
+            }
+        }
         let async_runs = self.async_runs();
         for s in sessions.iter_mut() {
             let live = s.live();
             let mut agents = match s.tool {
                 Tool::Pi => self.chalking_agents(&s.path.clone(), &s.t, live),
                 Tool::Claude => self.claude_agents(&s.path.clone(), live, &mut keep),
+                Tool::Codex => codex_agents(s, live, &codex_children),
                 _ => vec![],
             };
             for (sid, a) in &async_runs {

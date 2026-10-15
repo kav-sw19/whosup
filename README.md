@@ -46,8 +46,8 @@ an agent, sends anything over the network, or changes a file.
   are found by their process.
 - **Live status.** Each session shows *thinking*, the tool it's running, *waiting for you*,
   *interrupted* or *error*, updated every second.
-- **Sub-agents nested under their session:** Claude Code Task-tool agents, pi `agent_run` agents
-  and pi-subagents background runs, each with its task, model, status, duration and result.
+- **Sub-agents nested under their session:** Claude Code Task-tool agents, Codex multi-agent
+  agents, pi `agent_run` agents and pi-subagents background runs, each with its task, model, status, duration and result.
 - **Resume closed sessions.** `↵` on a closed session runs the right resume command for its agent
   (`pi --session …`, `claude --resume …`, `codex resume …`) in a new tab of the app it last ran
   in, or your default terminal.
@@ -144,7 +144,7 @@ Sub-agents show ✓ **done**, ✗ **error**, or ◌ **orphaned** when the sessio
 | --- | --- | --- | --- |
 | **pi** | process + transcript | Everything, including cost and sub-agents | `~/.pi/agent/sessions/` (`$PI_CODING_AGENT_DIR`) |
 | **Claude Code** | process + transcript | Title, model, status, tokens, prompt and reply, Task-tool sub-agents | `~/.claude/projects/` (`$CLAUDE_CONFIG_DIR`) |
-| **Codex** | process or desktop app + transcript | Thread name, model, status, tokens, prompt and reply | `~/.codex/sessions/` (`$CODEX_HOME`) |
+| **Codex** | process or desktop app + transcript | Thread name, model, status, tokens, prompt and reply, multi-agent sub-agents (`spawn_agent` calls and child threads naming their parent; not yet checked against a real multi-agent run) | `~/.codex/sessions/` (`$CODEX_HOME`) |
 | opencode, gemini, aider, amp, goose, crush, qwen, cursor-agent, copilot, droid | process only | Folder, uptime, CPU, memory, terminal | — |
 
 pi records its own cost. For Claude Code and Codex, whosup estimates cost from their token counts

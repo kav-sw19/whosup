@@ -1343,6 +1343,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                     AgentSource::Chalking => "agent_run".into(),
                     AgentSource::PiSubagents => "pi-subagents".into(),
                     AgentSource::ClaudeTask => "Claude Code Task tool".into(),
+                    AgentSource::CodexAgent => "Codex multi-agent".into(),
                 },
             ]));
             lines.push(Line::default());
