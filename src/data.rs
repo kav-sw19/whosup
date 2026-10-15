@@ -652,6 +652,24 @@ pub fn stuck_reason(t: &Transcript, live: bool, now: i64, after_ms: i64) -> Opti
     None
 }
 
+/// Which of these files some process has open (one `lsof` call).
+pub fn open_files(paths: &[PathBuf]) -> HashSet<PathBuf> {
+    if paths.is_empty() {
+        return HashSet::new();
+    }
+    let out = match std::process::Command::new("lsof").arg("-Fn").arg("--").args(paths).output() {
+        Ok(o) => o,
+        Err(_) => return HashSet::new(),
+    };
+    let wanted: HashSet<&PathBuf> = paths.iter().collect();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix('n'))
+        .map(PathBuf::from)
+        .filter(|p| wanted.contains(p))
+        .collect()
+}
+
 /// Codex sub-agents: `spawn_agent` calls in the thread, plus child threads that name it as
 /// their parent (those carry their own transcript, so they show status, model and cost).
 fn codex_agents(s: &Session, parent_live: bool, children: &[Session]) -> Vec<Agent> {
@@ -1256,7 +1274,15 @@ impl Scanner {
 
         // Codex desktop threads have no process of their own: live while the app runs and the
         // thread was touched recently
-        // (and the same for threads served by the Codex editor extension)
+        // (and the same for threads served by the Codex editor extension). A thread whose
+        // transcript some process holds open is live however quiet it has been.
+        let held_open: HashSet<PathBuf> = if codex_app || !servers.is_empty() {
+            let candidates: Vec<PathBuf> =
+                sessions.iter().filter(|s| s.tool == Tool::Codex && s.proc.is_none()).map(|s| s.path.clone()).collect();
+            open_files(&candidates)
+        } else {
+            HashSet::new()
+        };
         for s in sessions.iter_mut() {
             if let Some(p) = &s.proc {
                 s.host = p.host.clone();
@@ -1274,7 +1300,7 @@ impl Scanner {
             };
             if host.is_some() {
                 let window = if s.t.is_busy() { 10 * 60_000 } else { 30 * 60_000 };
-                s.app_live = now - s.mtime < window;
+                s.app_live = held_open.contains(&s.path) || now - s.mtime < window;
                 if s.app_live {
                     s.host = host;
                 }
@@ -1468,5 +1494,24 @@ mod approval_tests {
     #[test]
     fn codex_says_so_itself() {
         assert!(approval_pending(&ApprovalSignals { requested_by_agent: true, last_stop: None, quiet_ms: 0, ..base() }));
+    }
+}
+
+#[cfg(test)]
+mod open_file_tests {
+    #[test]
+    fn sees_files_held_open() {
+        let dir = std::env::temp_dir().join(format!("whosup-open-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (held, closed) = (dir.join("held.jsonl"), dir.join("closed.jsonl"));
+        std::fs::write(&held, "{}").unwrap();
+        std::fs::write(&closed, "{}").unwrap();
+        // lsof reports the canonical path (/private/var/… on macOS)
+        let (held, closed) = (held.canonicalize().unwrap(), closed.canonicalize().unwrap());
+        let _handle = std::fs::File::open(&held).unwrap();
+        let open = super::open_files(&[held.clone(), closed.clone()]);
+        assert!(open.contains(&held));
+        assert!(!open.contains(&closed));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

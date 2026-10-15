@@ -235,8 +235,9 @@ whosup finds agents by their process, so it sees them wherever they run:
 4. **Find terminals.** `ps` gives every tty and its foreground process group; walking each tty's
    parent processes finds the app that owns it.
 
-Codex desktop-app threads have no process of their own, so they count as live while Codex.app is
-running and the thread was written to in the last 10 minutes (if working) or 30 minutes (if idle).
+Codex desktop-app threads have no process of their own, so they count as live while Codex.app (or
+the Codex editor extension) is running and either some process holds the thread's transcript open,
+or it was written to in the last 10 minutes (if working) or 30 minutes (if idle).
 
 ## Jumping to a tab
 
