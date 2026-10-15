@@ -157,7 +157,7 @@ impl Transcript {
             Tool::Pi => self.ingest_pi(&v),
             Tool::Claude => self.ingest_claude(&v),
             Tool::Codex => self.ingest_codex(&v),
-            Tool::Other(_) => {}
+            Tool::Opencode | Tool::Other(_) => {}
         }
     }
 
@@ -429,6 +429,8 @@ pub enum AgentSource {
     Chalking,
     PiSubagents,
     ClaudeTask,
+    /// opencode child sessions (its Task tool)
+    OpencodeTask,
     /// Codex multi-agent: `spawn_agent` calls, or a child thread naming this one as parent
     CodexAgent,
 }
@@ -554,6 +556,9 @@ pub struct Scanner {
     codex_index_mtime: i64,
     /// pid -> session key for processes already tied to a session, kept while the pid lives
     pinned: HashMap<u32, String>,
+    pub opencode_db: PathBuf,
+    /// last opencode query: (database stamp, since, when queried, sessions)
+    opencode_cache: Option<((i64, i64), i64, i64, Vec<crate::opencode::OcSession>)>,
 }
 
 /// A resume whosup just launched: the next process of that agent in that folder is that session.
@@ -667,6 +672,47 @@ pub fn open_files(paths: &[PathBuf]) -> HashSet<PathBuf> {
         .filter_map(|l| l.strip_prefix('n'))
         .map(PathBuf::from)
         .filter(|p| wanted.contains(p))
+        .collect()
+}
+
+/// opencode sub-agents: child sessions (from its Task tool), with their own status and cost.
+fn opencode_agents(s: &Session, parent_live: bool, children: &[crate::opencode::OcSession]) -> Vec<Agent> {
+    let id = crate::opencode::id_of(&s.path).unwrap_or_default();
+    children
+        .iter()
+        .filter(|c| c.parent.as_deref() == Some(id.as_str()))
+        .map(|c| {
+            let mut t = c.t.clone();
+            crate::cost::fill(&mut t);
+            let running = parent_live && t.is_busy();
+            let status = match (running, t.last_stop.as_deref()) {
+                (true, _) => "running",
+                (false, Some("error")) => "error",
+                (false, Some("aborted")) => "stopped",
+                _ => "done",
+            };
+            Agent {
+                key: format!("opencode-agent:{}", c.id),
+                id: c.id.trim_start_matches("ses_").chars().take(7).collect(),
+                agent: if c.agent.is_empty() { "agent".into() } else { c.agent.clone() },
+                source: AgentSource::OpencodeTask,
+                status: status.into(),
+                running,
+                task: t.name.clone().or(t.first_user.clone()).unwrap_or_default(),
+                model: t.model.clone().unwrap_or_default(),
+                effort: t.thinking.clone().unwrap_or_default(),
+                activity: if running { t.activity() } else { status.into() },
+                started: t.started,
+                finished: if running { None } else { t.last_ts },
+                last_activity: t.last_ts,
+                turns: t.turns,
+                tool_calls: t.tool_calls,
+                tokens: t.tokens,
+                cost: t.cost,
+                last_text: t.last_text.clone(),
+                path: Some(crate::opencode::path_for(&c.id)),
+            }
+        })
         .collect()
 }
 
@@ -791,6 +837,8 @@ impl Scanner {
             codex_titles: HashMap::new(),
             codex_index_mtime: 0,
             pinned: HashMap::new(),
+            opencode_db: crate::opencode::db_path(),
+            opencode_cache: None,
         }
     }
 
@@ -1019,6 +1067,45 @@ impl Scanner {
         agents
     }
 
+    /// Add opencode's sessions (re-querying only when its database changed or every 30s), and
+    /// return the child sessions (sub-agents) separately.
+    fn load_opencode(&mut self, now: i64, sessions: &mut Vec<Session>) -> Vec<crate::opencode::OcSession> {
+        if !self.opencode_db.exists() {
+            return vec![];
+        }
+        let stamp = crate::opencode::stamp(&self.opencode_db);
+        let since = crate::opencode::since(self.recent_window_ms);
+        let fresh = matches!(&self.opencode_cache, Some((st, si, at, _)) if *st == stamp && (*si - since).abs() < 60_000 && now - at < 30_000);
+        if !fresh {
+            let loaded = crate::opencode::load(&self.opencode_db, since);
+            self.opencode_cache = Some((stamp, since, now, loaded));
+        }
+        let all = self.opencode_cache.as_ref().map(|c| c.3.clone()).unwrap_or_default();
+        let ids: HashSet<&str> = all.iter().map(|s| s.id.as_str()).collect();
+        let (children, top): (Vec<_>, Vec<_>) =
+            all.iter().cloned().partition(|s| s.parent.as_deref().map(|p| ids.contains(p)).unwrap_or(false));
+        for oc in top {
+            let mut t = oc.t;
+            crate::cost::fill(&mut t);
+            let path = crate::opencode::path_for(&oc.id);
+            sessions.push(Session {
+                shared_files: vec![],
+                awaiting_approval: false,
+                tool: Tool::Opencode,
+                host: None,
+                app_live: false,
+                key: format!("s:{}", path.display()),
+                tty: None,
+                mtime: t.last_ts.unwrap_or(0),
+                path,
+                t,
+                proc: None,
+                agents: vec![],
+            });
+        }
+        children
+    }
+
     /// Every transcript file of every supported agent.
     fn transcript_files(&self) -> Vec<(PathBuf, Tool)> {
         fn jsonl_in(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -1193,6 +1280,9 @@ impl Scanner {
             });
         }
 
+        // opencode: sessions live in its database, not in files
+        let opencode_children = self.load_opencode(now, &mut sessions);
+
         // 2. match processes to sessions of the same agent: exact start-time match first,
         //    then the most recently written transcript in the same cwd
         let mut taken: HashSet<usize> = HashSet::new();
@@ -1328,6 +1418,7 @@ impl Scanner {
                 Tool::Pi => self.chalking_agents(&s.path.clone(), &s.t, live),
                 Tool::Claude => self.claude_agents(&s.path.clone(), live, &mut keep),
                 Tool::Codex => codex_agents(s, live, &codex_children),
+                Tool::Opencode => opencode_agents(s, live, &opencode_children),
                 _ => vec![],
             };
             for (sid, a) in &async_runs {

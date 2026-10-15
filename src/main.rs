@@ -1,6 +1,7 @@
 mod cost;
 mod convo;
 mod data;
+mod opencode;
 mod export;
 mod models;
 #[cfg(test)]
@@ -436,6 +437,7 @@ impl App {
                     data::AgentSource::Chalking => providers::Tool::Pi,
                     data::AgentSource::ClaudeTask => providers::Tool::Claude,
                     data::AgentSource::CodexAgent => providers::Tool::Codex,
+                    data::AgentSource::OpencodeTask => providers::Tool::Opencode,
                     data::AgentSource::PiSubagents => return self.flash("This background run has no transcript to show", true),
                 };
                 let Some(p) = a.path.clone() else { return self.flash("No transcript for this agent", true) };
@@ -443,7 +445,7 @@ impl App {
             }
             _ => return self.flash("Select a session or agent to read its conversation", true),
         };
-        if path.as_os_str().is_empty() || !path.exists() {
+        if path.as_os_str().is_empty() || (!path.exists() && opencode::id_of(&path).is_none()) {
             return self.flash("No transcript for this session", true);
         }
         let mut v = ConvoView { title, tool, path, sidechain, size: u64::MAX, items: vec![], from_bottom: 0 };
@@ -1224,7 +1226,8 @@ mod render_test {
         let mut app = if env("WHOSUP_DEMO").is_some() {
             App::new_demo(Scanner::new(dir.clone(), 0))
         } else {
-            App::new(Scanner::new(dir, 30 * 3_600_000))
+            let hours: i64 = env("WHOSUP_WINDOW_H").and_then(|h| h.parse().ok()).unwrap_or(30);
+            App::new(Scanner::new(dir, hours * 3_600_000))
         };
         if env("WHOSUP_RECENT").is_some() {
             app.cycle_history();
@@ -1251,13 +1254,13 @@ mod render_test {
             app.copy_part('r');
             println!("flash: {}", app.flash.as_ref().map(|f| f.text.clone()).unwrap_or_default());
         }
-        if env("WHOSUP_CONVO").is_some() {
-            app.open_convo();
-        }
         if let Some(q) = env("WHOSUP_QUERY") {
             app.query = q;
-            app.searching = true;
+            app.searching = env("WHOSUP_CONVO").is_none();
             app.rebuild_rows();
+        }
+        if env("WHOSUP_CONVO").is_some() {
+            app.open_convo();
         }
         if let Some(n) = env("WHOSUP_SEL").and_then(|n| n.parse::<isize>().ok()) {
             app.move_sel(n);
@@ -1542,6 +1545,7 @@ mod history_tests {
             let mut s = Scanner::new(fixtures.join("pi"), window);
             s.claude_dir = fixtures.join("claude");
             s.codex_dir = fixtures.join("codex");
+            s.opencode_db = fixtures.join("none.db");
             s.scan().sessions.len()
         };
         // the fixture files are older than a second, so a 1 ms window loads none of them

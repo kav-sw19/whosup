@@ -114,6 +114,7 @@ pub fn tool_color(t: Tool) -> Color {
         Tool::Pi => pal().blue,
         Tool::Claude => pal().orange,
         Tool::Codex => pal().teal,
+        Tool::Opencode => pal().cyan,
         Tool::Other(_) => pal().violet,
     }
 }
@@ -1344,6 +1345,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                     AgentSource::PiSubagents => "pi-subagents".into(),
                     AgentSource::ClaudeTask => "Claude Code Task tool".into(),
                     AgentSource::CodexAgent => "Codex multi-agent".into(),
+                    AgentSource::OpencodeTask => "opencode sub-agent".into(),
                 },
             ]));
             lines.push(Line::default());

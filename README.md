@@ -14,7 +14,7 @@
 
 **`top` for your coding agents.**
 
-See every pi, Claude Code and Codex session you have running, what each one is doing right now, the sub-agents working inside
+See every pi, Claude Code, Codex and opencode session you have running, what each one is doing right now, the sub-agents working inside
 it, and every open terminal. Press `↵` to jump straight to its tab.
 
 </div>
@@ -145,7 +145,8 @@ Sub-agents show ✓ **done**, ✗ **error**, or ◌ **orphaned** when the sessio
 | **pi** | process + transcript | Everything, including cost and sub-agents | `~/.pi/agent/sessions/` (`$PI_CODING_AGENT_DIR`) |
 | **Claude Code** | process + transcript | Title, model, status, tokens, prompt and reply, Task-tool sub-agents | `~/.claude/projects/` (`$CLAUDE_CONFIG_DIR`) |
 | **Codex** | process or desktop app + transcript | Thread name, model, status, tokens, prompt and reply, multi-agent sub-agents (`spawn_agent` calls and child threads naming their parent; not yet checked against a real multi-agent run) | `~/.codex/sessions/` (`$CODEX_HOME`) |
-| opencode, gemini, aider, amp, goose, crush, qwen, cursor-agent, copilot, droid | process only | Folder, uptime, CPU, memory, terminal | — |
+| **opencode** | process + its SQLite database | Title, model, status (thinking, the tool running, waiting for you, error), cost, tokens, prompt and reply, sub-agents (child sessions), conversation, resume (`opencode -s`) | `~/.local/share/opencode/opencode.db` (`$XDG_DATA_HOME`), read-only via `sqlite3` |
+| gemini, aider, amp, goose, crush, qwen, cursor-agent, copilot, droid | process only | Folder, uptime, CPU, memory, terminal | — |
 
 pi records its own cost. For Claude Code and Codex, whosup estimates cost from their token counts
 (input, output, cache reads and writes) at list prices, shown with `≈`. Set your own rates with

@@ -223,6 +223,9 @@ fn codex_line(v: &Value, out: &mut Vec<Item>) {
 
 /// Read a whole transcript into its conversation.
 pub fn load(path: &Path, tool: Tool, sidechain_file: bool) -> Vec<Item> {
+    if tool == Tool::Opencode {
+        return crate::opencode::id_of(path).map(|id| crate::opencode::conversation(&crate::opencode::db_path(), &id)).unwrap_or_default();
+    }
     let Ok(text) = std::fs::read_to_string(path) else { return vec![] };
     let mut out = Vec::new();
     for line in text.lines() {
@@ -231,7 +234,7 @@ pub fn load(path: &Path, tool: Tool, sidechain_file: bool) -> Vec<Item> {
             Tool::Pi => pi_line(&v, &mut out),
             Tool::Claude => claude_line(&v, &mut out, sidechain_file),
             Tool::Codex => codex_line(&v, &mut out),
-            Tool::Other(_) => {}
+            Tool::Opencode | Tool::Other(_) => {}
         }
     }
     out

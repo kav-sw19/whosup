@@ -18,6 +18,7 @@ pub fn scan_fixtures() -> Snapshot {
     let mut s = Scanner::new(fixtures().join("pi"), i64::MAX / 4);
     s.claude_dir = fixtures().join("claude");
     s.codex_dir = fixtures().join("codex");
+    s.opencode_db = fixtures().join("opencode/none.db");
     s.scan()
 }
 
@@ -174,6 +175,7 @@ fn live_approval() {
         let mut s = Scanner::new(base.join("pi"), i64::MAX / 4);
         s.claude_dir = base.join("claude");
         s.codex_dir = base.join("codex");
+        s.opencode_db = base.join("none.db");
         s.scan()
     };
 

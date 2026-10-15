@@ -66,7 +66,7 @@ fn sh(s: &str) -> String {
 
 /// The agents installed on PATH that `N` can start: (key, label, command).
 pub fn startable() -> Vec<(char, Tool, &'static str)> {
-    [('1', Tool::Pi, "pi"), ('2', Tool::Claude, "claude"), ('3', Tool::Codex, "codex")]
+    [('1', Tool::Pi, "pi"), ('2', Tool::Claude, "claude"), ('3', Tool::Codex, "codex"), ('4', Tool::Opencode, "opencode")]
         .into_iter()
         .filter(|(_, _, bin)| on_path(bin))
         .collect()
@@ -79,6 +79,7 @@ pub fn new_session(tool: Tool, cwd: &str, last_host: Option<&str>) -> Result<Pla
         Tool::Pi => "pi",
         Tool::Claude => "claude",
         Tool::Codex => "codex",
+        Tool::Opencode => "opencode",
         Tool::Other(n) => return Err(format!("whosup can't start {n} sessions")),
     };
     if cwd.is_empty() {
@@ -164,6 +165,7 @@ pub fn plan(s: &Session, last_host: Option<&str>) -> Result<Plan, String> {
         Tool::Pi => format!("pi --session {}", sh(&s.path.display().to_string())),
         Tool::Claude if !s.t.id.is_empty() => format!("claude --resume {}", sh(&s.t.id)),
         Tool::Codex if !s.t.id.is_empty() => format!("codex resume {}", sh(&s.t.id)),
+        Tool::Opencode if !s.t.id.is_empty() => format!("opencode -s {}", sh(&s.t.id)),
         Tool::Other(n) => return Err(format!("whosup can't resume {n} sessions")),
         _ => return Err("No session id recorded, so it can't be resumed".into()),
     };
