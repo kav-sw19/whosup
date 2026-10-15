@@ -22,15 +22,6 @@ port your dev servers hold open. Press `↵` to jump straight to its tab.
 
 <img alt="whosup in action: sessions from pi, Claude Code and Codex with their sub-agents; a Claude session stops to ask for approval and jumps to the top; a search; jumping to a terminal tab; the Terminals tab; the Ports tab: opening a dev server an agent started and closing a detached one; the Usage tab; the light theme" src="docs/whosup-demo.gif">
 
-<details>
-<summary>Still screenshots (Sessions and Ports tabs)</summary>
-
-<img alt="whosup showing three live sessions (Codex waiting for you, Claude Code editing with two sub-agents, pi thinking) and two recently closed ones, with the selected session's details on the right" src="docs/whosup-dark.png">
-
-<img alt="whosup's Ports tab: dev servers started by agents and terminals, a detached one, and ports held by apps" src="docs/whosup-ports.png">
-
-</details>
-
 ## Why
 
 Coding agents run for minutes at a time, start sub-agents of their own, and end up spread across
