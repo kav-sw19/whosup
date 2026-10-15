@@ -43,6 +43,7 @@ KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to t
       a history: live only → recent → 7 days → all · p group by project · v read the conversation
       y copy (r resume command, i id, f file, d folder, l last reply) · e export to Markdown
       x stop a live session (asks: i interrupt its turn with Esc, k end it)
+      N start a new session in the selected session's folder (asks: 1 pi, 2 claude, 3 codex)
       f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
@@ -167,6 +168,8 @@ pub struct App {
     projects: std::collections::HashMap<String, String>,
     /// waiting for the second key of `y` (copy what?)
     pub copying: bool,
+    /// asking which agent to start (`N`): the folder, and where it would open
+    pub starting: Option<(String, Option<String>, Vec<(char, providers::Tool, &'static str)>)>,
     /// asking how to stop a session (`x`): its pid, title, tty and terminal app
     pub stopping: Option<(u32, String, Option<String>, String)>,
     /// search text (`/`); every word must match
@@ -301,6 +304,7 @@ impl App {
             searching: false,
             copying: false,
             stopping: None,
+            starting: None,
         };
         ui::set_light(a.settings.light);
         a
@@ -337,6 +341,34 @@ impl App {
         match export::copy(&text) {
             Ok(()) => self.flash(format!("Copied the {what}"), false),
             Err(e) => self.flash(format!("Couldn't copy: {e}"), true),
+        }
+    }
+
+    /// `N`: ask which agent to start in the selected session's folder.
+    fn ask_start(&mut self) {
+        let (cwd, host) = match self.selected_session() {
+            Some(s) if !s.t.cwd.is_empty() => (s.t.cwd.clone(), self.hosts.get(&s.key).cloned().or(s.host.clone())),
+            _ => (std::env::var("HOME").unwrap_or_default(), None),
+        };
+        let agents = resume::startable();
+        if agents.is_empty() {
+            return self.flash("None of pi, claude or codex is on your PATH", true);
+        }
+        self.starting = Some((cwd, host, agents));
+    }
+
+    fn start(&mut self, key: char) {
+        let Some((cwd, host, agents)) = self.starting.take() else { return };
+        let Some((_, tool, _)) = agents.iter().find(|(k, _, _)| *k == key) else { return self.flash("Nothing started", false) };
+        match resume::new_session(*tool, &cwd, host.as_deref()) {
+            Ok(plan) => {
+                self.flash(format!("Starting {} in {}…", tool.label(), plan.place.describe()), false);
+                let tx = self.focus_tx.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(resume::launch(&plan).map(|_| format!("Started {} in {}", plan.command, ui::home_rel(&plan.cwd))));
+                });
+            }
+            Err(e) => self.flash(e, true),
         }
     }
 
@@ -951,6 +983,12 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     }
                     continue;
                 }
+                // the key after `N`: which agent
+                if app.starting.is_some() {
+                    let c = if let KeyCode::Char(c) = k.code { c } else { ' ' };
+                    app.start(c);
+                    continue;
+                }
                 // the key after `x`: how to stop it
                 if app.stopping.is_some() {
                     let c = if let KeyCode::Char(c) = k.code { c } else { ' ' };
@@ -1015,6 +1053,7 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     KeyCode::Char('y') if app.view == View::Sessions => app.copying = true,
                     KeyCode::Char('e') if app.view == View::Sessions => app.export_session(),
                     KeyCode::Char('x') if app.view == View::Sessions => app.ask_stop(),
+                    KeyCode::Char('N') => app.ask_start(),
                     KeyCode::Char('p') if app.view == View::Sessions => {
                         app.group = !app.group;
                         app.rebuild_rows();
@@ -1198,6 +1237,13 @@ mod render_test {
         if env("WHOSUP_GROUP").is_some() {
             app.group = true;
             app.rebuild_rows();
+        }
+        if let Some(k) = env("WHOSUP_START").and_then(|k| k.chars().next()) {
+            app.ask_start();
+            app.start(k);
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            app.poll_focus();
+            println!("flash: {}", app.flash.as_ref().map(|f| f.text.clone()).unwrap_or_default());
         }
         if env("WHOSUP_EXPORT").is_some() {
             app.export_session();

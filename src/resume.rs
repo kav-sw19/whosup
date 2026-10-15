@@ -64,6 +64,33 @@ fn sh(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// The agents installed on PATH that `N` can start: (key, label, command).
+pub fn startable() -> Vec<(char, Tool, &'static str)> {
+    [('1', Tool::Pi, "pi"), ('2', Tool::Claude, "claude"), ('3', Tool::Codex, "codex")]
+        .into_iter()
+        .filter(|(_, _, bin)| on_path(bin))
+        .collect()
+}
+
+/// A new session of `tool` in `cwd`, opened where `last_host` ran if that's a terminal we can
+/// drive, else the default terminal.
+pub fn new_session(tool: Tool, cwd: &str, last_host: Option<&str>) -> Result<Plan, String> {
+    let command = match tool {
+        Tool::Pi => "pi",
+        Tool::Claude => "claude",
+        Tool::Codex => "codex",
+        Tool::Other(n) => return Err(format!("whosup can't start {n} sessions")),
+    };
+    if cwd.is_empty() {
+        return Err("No folder to start in".into());
+    }
+    let (place, because) = match last_host.and_then(place_for_app) {
+        Some(p @ Place::Terminal(_)) => (p, "where the selected session ran"),
+        _ => (Place::Terminal(default_terminal()), "your default terminal"),
+    };
+    Ok(Plan { command: command.to_string(), cwd: cwd.to_string(), place, because })
+}
+
 fn on_path(bin: &str) -> bool {
     Command::new("sh")
         .arg("-c")
@@ -259,6 +286,19 @@ fn copy(text: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::sh;
+
+    #[test]
+    fn new_session_plans() {
+        use super::{new_session, Place};
+        use crate::providers::Tool;
+        let p = new_session(Tool::Claude, "/x/y", Some("iTerm")).unwrap();
+        assert_eq!((p.command.as_str(), p.cwd.as_str(), p.place), ("claude", "/x/y", Place::Terminal("iTerm".into())));
+        // an editor isn't somewhere we can type a command: use the default terminal
+        let p = new_session(Tool::Pi, "/x", Some("Visual Studio Code")).unwrap();
+        assert!(matches!(p.place, Place::Terminal(_)));
+        assert!(new_session(Tool::Other("aider"), "/x", None).is_err());
+        assert!(new_session(Tool::Codex, "", None).is_err());
+    }
 
     #[test]
     fn quotes_for_sh() {

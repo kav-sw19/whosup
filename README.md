@@ -116,6 +116,7 @@ whosup --interrupt ttys003  # press Esc in that tty's tab
 | `y` then `r` `i` `f` `d` `l` | Copy the resume command, session id, transcript path, folder or last reply |
 | `e` | Export the conversation to Markdown in `~/Downloads` |
 | `x` | Stop a live session: then `i` interrupts its turn (presses Esc in its Ghostty or iTerm2 tab) or `k` ends it (SIGTERM) |
+| `N` | Start a new session in the selected session's folder: `1` pi, `2` claude, `3` codex (those on your PATH) |
 | `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
 | `f` | Hide finished sub-agents |
 | `p` | Group sessions by project (their git repository, else their folder) |

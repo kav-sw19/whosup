@@ -640,6 +640,21 @@ fn draw_convo(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if let Some((cwd, _, agents)) = &app.starting {
+        let p = pal();
+        let mut spans = vec![
+            Span::styled(" new ", Style::new().fg(p.on_accent).bg(p.green).bold()),
+            Span::styled(format!("  session in {}:   ", home_rel(cwd)), Style::new().fg(p.fg)),
+        ];
+        for (k, tool, _) in agents {
+            spans.push(Span::styled(k.to_string(), Style::new().fg(p.soft).bold()));
+            spans.push(Span::styled(format!(" {}   ", tool.label()), Style::new().fg(tool_color(*tool))));
+        }
+        spans.push(Span::styled("any other key", Style::new().fg(p.soft).bold()));
+        spans.push(Span::styled(" cancel", Style::new().fg(p.muted)));
+        f.render_widget(Line::from(spans), area);
+        return;
+    }
     if let Some((pid, title, tty, _)) = &app.stopping {
         let p = pal();
         let mut spans = vec![
@@ -741,6 +756,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("y", "copy", None, 6),
             ("e", "export", None, 7),
             ("x", "stop", None, 7),
+            ("N", "new", None, 6),
             ("n", "notify", Some(app.settings.notify), 4),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),
