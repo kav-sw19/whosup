@@ -922,7 +922,13 @@ impl Scanner {
         }
 
         self.cache.retain(&keep);
-        sessions.sort_by_key(|s| (!s.live(), !(s.running_agents() > 0), std::cmp::Reverse(s.mtime)));
+        // Live sessions keep a fixed order (newest first by start time) so rows don't jump as
+        // each one writes; closed ones are ordered by their last activity, matching the TIME column.
+        sessions.sort_by_key(|s| {
+            let live = s.live() || s.running_agents() > 0;
+            let key = if live { s.t.started.unwrap_or(s.mtime) } else { s.t.last_ts.unwrap_or(s.mtime) };
+            (!live, std::cmp::Reverse(key), s.key.clone())
+        });
         Snapshot { sessions, orphan_procs: orphans, terminals }
     }
 }

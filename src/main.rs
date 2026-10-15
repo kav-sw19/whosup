@@ -1,4 +1,5 @@
 mod data;
+mod focus;
 mod providers;
 mod terms;
 mod ui;
@@ -12,21 +13,22 @@ use ratatui::{
 use ui::{home_rel, one_line, short_model};
 use std::{
     collections::HashSet,
+    sync::mpsc,
     path::PathBuf,
     time::{Duration, Instant},
 };
 
 const HELP: &str = "pitop — live view of coding-agent sessions (pi, Claude Code, Codex, …), their sub-agents and open terminals
 
-USAGE: pitop [--dir <pi agent dir>] [--recent <hours>] [--once [--all]]
+USAGE: pitop [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focus <tty>]
 
   --dir      pi agent dir (default: $PI_CODING_AGENT_DIR or ~/.pi/agent); Claude Code and Codex
              use $CLAUDE_CONFIG_DIR (~/.claude) and $CODEX_HOME (~/.codex)
   --recent   also list sessions touched in the last N hours (default 24; toggle with `a`)
   --once     print a plain-text snapshot and exit (--all: include closed recent sessions)
 
-KEYS: tab/1/2 sessions·terminals · ↑/↓ j/k move · ←/→ h/l fold · ↵ open · J/K scroll details
-      a all-recent/live-only
+KEYS: tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
+      ←/→ h/l fold · s (terminals) show its session · J/K scroll details · a all-recent/live-only
       f hide finished agents · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
@@ -36,6 +38,8 @@ pub enum RowRef {
     Orphan(usize),
     Terminal(usize),
     Job(usize, usize),
+    /// Non-selectable separator between live and recently closed sessions.
+    Divider,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,15 +48,28 @@ pub enum View {
     Terminals,
 }
 
+/// A short message shown in place of the key hints.
+pub struct Flash {
+    pub text: String,
+    pub error: bool,
+    pub at: Instant,
+}
+
 pub struct App {
     view: View,
+    pub flash: Option<Flash>,
+    focus_tx: mpsc::Sender<Result<String, String>>,
+    focus_rx: mpsc::Receiver<Result<String, String>>,
     /// selection remembered per view
     saved_sel: [Option<String>; 2],
     scanner: Scanner,
     snap: Snapshot,
     show_recent: bool,
     hide_finished: bool,
+    /// live sessions the user folded
     collapsed: HashSet<String>,
+    /// closed sessions the user unfolded (closed sessions start folded)
+    expanded: HashSet<String>,
     rows: Vec<(String, RowRef)>,
     state: TableState,
     selected_key: Option<String>,
@@ -61,14 +78,19 @@ pub struct App {
 
 impl App {
     fn new(scanner: Scanner) -> Self {
+        let (focus_tx, focus_rx) = mpsc::channel();
         let mut a = Self {
             view: View::Sessions,
+            flash: None,
+            focus_tx,
+            focus_rx,
             saved_sel: [None, None],
             scanner,
             snap: Snapshot { sessions: vec![], orphan_procs: vec![], terminals: vec![] },
             show_recent: false,
             hide_finished: false,
             collapsed: HashSet::new(),
+            expanded: HashSet::new(),
             rows: vec![],
             state: TableState::default(),
             selected_key: None,
@@ -98,9 +120,18 @@ impl App {
             }
             return self.finish_rows(rows);
         }
-        for (i, s) in self.visible_sessions() {
+        let mut divided = false;
+        let visible: Vec<usize> = self.visible_sessions().map(|(i, _)| i).collect();
+        for i in visible {
+            let s = &self.snap.sessions[i];
+            if !divided && !Self::open_by_default(s) {
+                if !rows.is_empty() {
+                    rows.push(("div:recent".to_string(), RowRef::Divider));
+                }
+                divided = true;
+            }
             rows.push((s.key.clone(), RowRef::Session(i)));
-            if self.collapsed.contains(&s.key) {
+            if self.is_collapsed(s) {
                 continue;
             }
             for (j, a) in s.agents.iter().enumerate() {
@@ -116,13 +147,24 @@ impl App {
         self.finish_rows(rows);
     }
 
+    fn open_by_default(s: &Session) -> bool {
+        s.live() || s.running_agents() > 0
+    }
+
+    pub fn is_collapsed(&self, s: &Session) -> bool {
+        if Self::open_by_default(s) { self.collapsed.contains(&s.key) } else { !self.expanded.contains(&s.key) }
+    }
+
     fn finish_rows(&mut self, rows: Vec<(String, RowRef)>) {
         self.rows = rows;
-        let idx = self
+        let mut idx = self
             .selected_key
             .as_ref()
             .and_then(|k| self.rows.iter().position(|(rk, _)| rk == k))
             .unwrap_or_else(|| self.state.selected().unwrap_or(0).min(self.rows.len().saturating_sub(1)));
+        if matches!(self.rows.get(idx), Some((_, RowRef::Divider))) {
+            idx += 1;
+        }
         self.state.select(if self.rows.is_empty() { None } else { Some(idx) });
         self.selected_key = self.state.selected().map(|i| self.rows[i].0.clone());
     }
@@ -137,7 +179,14 @@ impl App {
             return;
         }
         let cur = self.state.selected().unwrap_or(0) as isize;
-        let n = (cur + d).clamp(0, self.rows.len() as isize - 1) as usize;
+        let last = self.rows.len() as isize - 1;
+        let mut n = (cur + d).clamp(0, last);
+        // never rest on the divider: keep going the same way, or back off at the ends
+        if matches!(self.rows[n as usize].1, RowRef::Divider) {
+            let step = if d >= 0 { 1 } else { -1 };
+            n = if (0..=last).contains(&(n + step)) { n + step } else { n - step };
+        }
+        let n = n as usize;
         if self.state.selected() != Some(n) {
             self.detail_scroll = 0;
         }
@@ -161,17 +210,74 @@ impl App {
         self.rebuild_rows();
     }
 
-    /// Enter: expand a session, or jump from a terminal to the pi session inside it.
+    fn flash(&mut self, text: impl Into<String>, error: bool) {
+        self.flash = Some(Flash { text: text.into(), error, at: Instant::now() });
+    }
+
+    /// The tty of whatever is selected: a terminal, or the terminal a session runs in.
+    fn selected_tty(&self) -> Result<String, String> {
+        let term_of_pid = |pid: u32| {
+            self.snap.terminals.iter().find(|t| t.foreground.iter().any(|p| p.pid == pid)).map(|t| t.tty.clone())
+        };
+        match self.selected() {
+            Some(RowRef::Terminal(i)) | Some(RowRef::Job(i, _)) => Ok(self.snap.terminals[*i].tty.clone()),
+            Some(RowRef::Session(i)) | Some(RowRef::Agent(i, _)) => {
+                let s = &self.snap.sessions[*i];
+                if let Some(tty) = &s.tty {
+                    return Ok(tty.clone());
+                }
+                if s.app_live {
+                    return Err(format!("This {} thread lives in the desktop app, not a terminal", s.tool.label()));
+                }
+                if !s.live() {
+                    return Err("This session is closed".into());
+                }
+                Err("This session isn't running in a terminal pitop can see".into())
+            }
+            Some(RowRef::Orphan(k)) => {
+                term_of_pid(self.snap.orphan_procs[*k].pid).ok_or_else(|| "This process has no terminal".into())
+            }
+            _ => Err("Nothing selected".into()),
+        }
+    }
+
+    /// Enter: bring the selected session's (or terminal's) tab to the front.
     fn activate(&mut self) {
-        if let Some(RowRef::Terminal(i)) = self.selected() {
-            if let Some(key) = self.snap.terminals[*i].session.as_ref().and_then(|l| l.key.clone()) {
+        let tty = match self.selected_tty() {
+            Ok(t) => t,
+            Err(e) => return self.flash(e, true),
+        };
+        let apps: focus::AppByTty = self.snap.terminals.iter().map(|t| (t.tty.clone(), t.app.clone())).collect();
+        let app = apps.get(&tty).cloned().unwrap_or_default();
+        let short = tty.trim_start_matches("tty").to_string();
+        self.flash(format!("Switching to {short} in {app}…"), false);
+        let tx = self.focus_tx.clone();
+        std::thread::spawn(move || {
+            let r = focus::focus(&tty, &app, &apps).map(|_| format!("Switched to {short} in {app}"));
+            let _ = tx.send(r);
+        });
+    }
+
+    /// From a terminal row, show the agent session running in it.
+    fn show_session(&mut self) {
+        let Some(RowRef::Terminal(i)) = self.selected() else { return };
+        match self.snap.terminals[*i].session.as_ref().and_then(|l| l.key.clone()) {
+            Some(key) => {
                 self.set_view(View::Sessions);
                 self.selected_key = Some(key);
                 self.rebuild_rows();
             }
-            return;
+            None => self.flash("No agent session in this terminal", true),
         }
-        self.set_collapsed(false);
+    }
+
+    fn poll_focus(&mut self) {
+        while let Ok(r) = self.focus_rx.try_recv() {
+            match r {
+                Ok(m) => self.flash(m, false),
+                Err(e) => self.flash(e, true),
+            }
+        }
     }
 
     fn set_collapsed(&mut self, collapse: bool) {
@@ -179,12 +285,25 @@ impl App {
             Some(RowRef::Session(i)) | Some(RowRef::Agent(i, _)) => *i,
             _ => return,
         };
-        let key = self.snap.sessions[si].key.clone();
+        let s = &self.snap.sessions[si];
+        let key = s.key.clone();
+        let default_open = Self::open_by_default(s);
+        match (collapse, default_open) {
+            (true, true) => {
+                self.collapsed.insert(key.clone());
+            }
+            (true, false) => {
+                self.expanded.remove(&key);
+            }
+            (false, true) => {
+                self.collapsed.remove(&key);
+            }
+            (false, false) => {
+                self.expanded.insert(key.clone());
+            }
+        }
         if collapse {
-            self.collapsed.insert(key.clone());
             self.selected_key = Some(key);
-        } else {
-            self.collapsed.remove(&key);
         }
         self.rebuild_rows();
     }
@@ -242,6 +361,7 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
     let frame = Duration::from_millis(80); // spinner cadence
     let mut last = Instant::now();
     loop {
+        app.poll_focus();
         term.draw(|f| ui::draw(f, &mut app))?;
         if event::poll(frame)? {
             if let Event::Key(k) = event::read()? {
@@ -260,6 +380,7 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     KeyCode::Left | KeyCode::Char('h') => app.set_collapsed(true),
                     KeyCode::Right | KeyCode::Char('l') => app.set_collapsed(false),
                     KeyCode::Enter => app.activate(),
+                    KeyCode::Char('s') if app.view == View::Terminals => app.show_session(),
                     KeyCode::Tab | KeyCode::BackTab => {
                         let v = if app.view == View::Sessions { View::Terminals } else { View::Sessions };
                         app.set_view(v)
@@ -300,6 +421,21 @@ fn main() -> std::io::Result<()> {
             "--recent" => hours = args.next().and_then(|h| h.parse().ok()).unwrap_or(hours),
             "--once" => once = true,
             "--all" => all = true,
+            // bring a tty's tab to the front, e.g. `pitop --focus ttys003`
+            "--focus" => {
+                let tty = args.next().unwrap_or_default();
+                let terms = crate::terms::scan(&sysinfo::System::new_all());
+                let apps: focus::AppByTty = terms.iter().map(|t| (t.tty.clone(), t.app.clone())).collect();
+                let app = apps.get(&tty).cloned().unwrap_or_default();
+                match focus::focus(&tty, &app, &apps) {
+                    Ok(()) => println!("focused {tty} in {app}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
             "-h" | "--help" => {
                 println!("{HELP}");
                 return Ok(());
@@ -329,52 +465,53 @@ mod render_test {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
 
-    /// `cargo test render -- --ignored --nocapture` renders the real data to stdout.
+    /// Render real data: `PITOP_SIZE=120x30 PITOP_VIEW=terminals PITOP_SEL=3 PITOP_RECENT=1
+    /// cargo test --release render -- --ignored --nocapture`. Also writes /tmp/pitop-<size>.html.
     #[test]
     #[ignore]
     fn render() {
+        let env = |k: &str| std::env::var(k).ok();
+        let (w, h) = env("PITOP_SIZE")
+            .and_then(|s| s.split_once('x').map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap())))
+            .unwrap_or((160u16, 40u16));
         let dir = PathBuf::from(std::env::var("HOME").unwrap()).join(".pi/agent");
         let mut app = App::new(Scanner::new(dir, 30 * 3_600_000));
-        app.show_recent = true;
+        app.show_recent = env("PITOP_RECENT").is_some();
+        app.hide_finished = env("PITOP_HIDE").is_some();
         app.rebuild_rows();
-        for w in [160u16, 100] {
-            let mut t = Terminal::new(TestBackend::new(w, 40)).unwrap();
-            t.draw(|f| ui::draw(f, &mut app)).unwrap();
-            let buf = t.backend().buffer().clone();
-            let mut html = String::from("<html><head><meta charset='utf-8'></head><body style='margin:0;background:#1a1b26;width:max-content'><pre style='margin:0;padding:12px;font:13px/1.25 Menlo,monospace;color:#c0caf5'>");
-            for y in 0..buf.area.height {
-                let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
-                println!("{line}");
-                for x in 0..buf.area.width {
-                    let c = &buf[(x, y)];
-                    let col = |c: ratatui::style::Color| match c {
-                        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
-                        _ => "inherit".into(),
-                    };
-                    let bg = match c.bg { ratatui::style::Color::Reset => "transparent".into(), b => col(b) };
-                    let bold = if c.modifier.contains(ratatui::style::Modifier::BOLD) { "font-weight:bold;" } else { "" };
-                    let sym: String = c.symbol().chars().map(|ch| match ch {
-                        '&' => "&amp;".to_string(),
-                        '<' => "&lt;".to_string(),
-                        '>' => "&gt;".to_string(),
-                        c if c.is_ascii() => c.to_string(),
-                        c => format!("&#{};", c as u32),
-                    }).collect();
-                    html.push_str(&format!("<span style='color:{};background:{};{bold}'>{sym}</span>", col(c.fg), bg));
-                }
-                html.push('\n');
-            }
-            html.push_str("</pre></body></html>");
-            std::fs::write(format!("/tmp/pitop-{w}.html"), html).unwrap();
-            app.move_sel(7);
+        if env("PITOP_VIEW").as_deref() == Some("terminals") {
+            app.set_view(View::Terminals);
         }
-        app.set_view(View::Terminals);
-        let mut t = Terminal::new(TestBackend::new(150, 22)).unwrap();
+        if let Some(n) = env("PITOP_SEL").and_then(|n| n.parse::<isize>().ok()) {
+            app.move_sel(n);
+        }
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| ui::draw(f, &mut app)).unwrap();
         let buf = t.backend().buffer().clone();
+        let mut html = String::from("<html><body style='margin:0;background:#1a1b26;width:max-content'><pre style='margin:0;padding:12px;font:13px/1.25 Menlo,monospace;color:#c0caf5'>");
         for y in 0..buf.area.height {
             let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
             println!("{line}");
+            for x in 0..buf.area.width {
+                let c = &buf[(x, y)];
+                let col = |c: ratatui::style::Color| match c {
+                    ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+                    _ => "inherit".into(),
+                };
+                let bg = match c.bg { ratatui::style::Color::Reset => "transparent".into(), b => col(b) };
+                let bold = if c.modifier.contains(ratatui::style::Modifier::BOLD) { "font-weight:bold;" } else { "" };
+                let sym: String = c.symbol().chars().map(|ch| match ch {
+                    '&' => "&amp;".to_string(),
+                    '<' => "&lt;".to_string(),
+                    '>' => "&gt;".to_string(),
+                    c if c.is_ascii() => c.to_string(),
+                    c => format!("&#{};", c as u32),
+                }).collect();
+                html.push_str(&format!("<span style='color:{};background:{};{bold}'>{sym}</span>", col(c.fg), bg));
+            }
+            html.push('\n');
         }
+        html.push_str("</pre></body></html>");
+        std::fs::write(format!("/tmp/pitop-{w}x{h}.html"), html).unwrap();
     }
 }

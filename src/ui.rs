@@ -251,74 +251,113 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(format!(" {n} "), Style::new().fg(if active { SOFT } else { FAINT }).bg(bg)),
         ]
     };
-    let mut left = vec![
+    let mut core = vec![
         Span::styled(" pitop ", Style::new().fg(Color::Rgb(26, 27, 38)).bg(BLUE).bold()),
         Span::raw("  "),
     ];
-    left.extend(tab("Sessions", live, "1", app.view == View::Sessions));
-    left.push(Span::raw(" "));
-    left.extend(tab("Terminals", terms.len(), "2", app.view == View::Terminals));
-    left.push(sep());
-    if app.view == View::Sessions {
-        left.extend(stat(working, "working", AMBER, if working > 0 { spinner() } else { "◌" }));
-        left.push(sep());
-        left.extend(stat(agents, if agents == 1 { "agent" } else { "agents" }, VIOLET, "◆"));
+    core.extend(tab("Sessions", live, "1", app.view == View::Sessions));
+    core.push(Span::raw(" "));
+    core.extend(tab("Terminals", terms.len(), "2", app.view == View::Terminals));
+
+    let mut stats = vec![sep()];
+    let right: Vec<Span> = if app.view == View::Sessions {
+        stats.extend(stat(working, "working", AMBER, if working > 0 { spinner() } else { "◌" }));
+        stats.push(sep());
+        stats.extend(stat(agents, if agents == 1 { "agent" } else { "agents" }, VIOLET, "◆"));
+        vec![
+            Span::styled(money(cost), Style::new().fg(FG).bold()),
+            Span::styled(" in live sessions ", Style::new().fg(MUTED)),
+        ]
     } else {
         let running = terms.iter().filter(|t| !t.at_prompt()).count();
         let with_agent = terms.iter().filter(|t| t.session.is_some()).count();
-        left.extend(stat(running, "running", BLUE, "▶"));
-        left.push(sep());
-        left.extend(stat(with_agent, "with agents", VIOLET, "◆"));
-    }
-    f.render_widget(Line::from(left), area);
-
-    if app.view == View::Terminals {
+        stats.extend(stat(running, "running", BLUE, "▶"));
+        stats.push(sep());
+        stats.extend(stat(with_agent, "with agents", VIOLET, "◆"));
         let cpu: f32 = terms.iter().map(|t| t.cpu).sum();
         let mem: u64 = terms.iter().map(|t| t.mem).sum();
-        let right = vec![
+        vec![
             Span::styled(format!("{cpu:.0}%"), Style::new().fg(FG).bold()),
             Span::styled(" cpu   ", Style::new().fg(MUTED)),
             Span::styled(mem_str(mem), Style::new().fg(FG).bold()),
             Span::styled(" memory ", Style::new().fg(MUTED)),
-        ];
-        f.render_widget(Line::from(right).alignment(Alignment::Right), area);
-        return;
-    }
+        ]
+    };
 
-    let mut right = vec![];
-    if app.show_recent {
-        right.push(Span::styled("recent shown  ", Style::new().fg(VIOLET)));
+    // Drop the least important parts first so nothing ever overlaps: right side, then stats.
+    let width = |v: &[Span]| v.iter().map(|s| s.width()).sum::<usize>();
+    let avail = area.width as usize;
+    let (cw, sw, rw) = (width(&core), width(&stats), width(&right));
+    let mut left = core;
+    if cw + sw <= avail {
+        left.extend(stats);
     }
-    if app.hide_finished {
-        right.push(Span::styled("finished hidden  ", Style::new().fg(VIOLET)));
+    let lw = width(&left);
+    f.render_widget(Line::from(left), area);
+    if lw + rw + 2 <= avail {
+        f.render_widget(Line::from(right).alignment(Alignment::Right), area);
     }
-    right.push(Span::styled(money(cost), Style::new().fg(FG).bold()));
-    right.push(Span::styled(" in live sessions ", Style::new().fg(MUTED)));
-    f.render_widget(Line::from(right).alignment(Alignment::Right), area);
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let keys: &[(&str, &str)] = match app.view {
-        View::Sessions => &[
-            ("tab", "terminals"),
-            ("↑↓", "move"),
-            ("←→", "fold"),
-            ("J K", "scroll"),
-            ("a", "recent"),
-            ("f", "finished"),
-            ("q", "quit"),
-        ],
-        View::Terminals => &[("tab", "sessions"), ("↑↓", "move"), ("↵", "open session"), ("J K", "scroll"), ("q", "quit")],
-    };
-    let mut spans = vec![Span::raw(" ")];
-    for (i, (k, v)) in keys.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled("  ·  ", Style::new().fg(FAINT)));
-        }
-        spans.push(Span::styled(*k, Style::new().fg(SOFT).bold()));
-        spans.push(Span::styled(format!(" {v}"), Style::new().fg(MUTED)));
+    // a recent action's result replaces the hints for a few seconds
+    if let Some(fl) = app.flash.as_ref().filter(|fl| fl.at.elapsed().as_secs() < 4) {
+        let (glyph, color) = if fl.error { ("✗", RED) } else if fl.text.ends_with('…') { (spinner(), CYAN) } else { ("✓", GREEN) };
+        f.render_widget(
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled(format!("{glyph} "), Style::new().fg(color)),
+                Span::styled(fl.text.clone(), Style::new().fg(if fl.error { RED } else { SOFT })),
+            ]),
+            area,
+        );
+        return;
     }
-    f.render_widget(Line::from(spans), area);
+    // (key, label, toggle state, priority: lower survives longer on narrow screens)
+    let keys: Vec<(&str, &str, Option<bool>, u8)> = match app.view {
+        View::Sessions => vec![
+            ("tab", "terminals", None, 1),
+            ("↑↓", "move", None, 2),
+            ("↵", "go to tab", None, 2),
+            ("←→", "fold", None, 5),
+            ("J K", "scroll", None, 6),
+            ("a", "recent", Some(app.show_recent), 3),
+            ("f", "hide finished", Some(app.hide_finished), 4),
+            ("q", "quit", None, 0),
+        ],
+        View::Terminals => vec![
+            ("tab", "sessions", None, 1),
+            ("↑↓", "move", None, 2),
+            ("↵", "go to tab", None, 2),
+            ("s", "show session", None, 3),
+            ("J K", "scroll", None, 6),
+            ("q", "quit", None, 0),
+        ],
+    };
+    let render = |keys: &[(&str, &str, Option<bool>, u8)]| -> Vec<Span<'static>> {
+        let mut spans = vec![Span::raw(" ")];
+        for (i, (k, v, on, _)) in keys.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled("  ·  ", Style::new().fg(FAINT)));
+            }
+            spans.push(Span::styled(k.to_string(), Style::new().fg(SOFT).bold()));
+            match on {
+                Some(true) => {
+                    spans.push(Span::styled(format!(" {v}"), Style::new().fg(VIOLET)));
+                    spans.push(Span::styled(" ●", Style::new().fg(VIOLET)));
+                }
+                _ => spans.push(Span::styled(format!(" {v}"), Style::new().fg(MUTED))),
+            }
+        }
+        spans
+    };
+    let mut keys = keys;
+    let fits = |spans: &[Span]| spans.iter().map(|s| s.width()).sum::<usize>() <= area.width as usize;
+    while !fits(&render(&keys)) && keys.len() > 1 {
+        let worst = keys.iter().enumerate().max_by_key(|(_, k)| k.3).map(|(i, _)| i).unwrap();
+        keys.remove(worst);
+    }
+    f.render_widget(Line::from(render(&keys)), area);
 }
 
 // ── list ──────────────────────────────────────────────────────────────────────
@@ -326,14 +365,22 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let right = |s: String, st: Style| Cell::from(Line::from(Span::styled(s, st)).alignment(Alignment::Right));
     let mut rows: Vec<Row> = Vec::new();
     let n_rows = app.rows.len();
-    // the folder column only earns its space on wide lists; it's always in the detail pane
-    let show_where = area.width >= 130;
-    let fit = |mut v: Vec<Cell<'static>>| {
-        if !show_where {
-            v.remove(2);
-        }
-        Row::new(v)
-    };
+    // Columns give way to the title as the list narrows; everything dropped here is still in
+    // the details pane. Order: glyph, title, where, model, status, time, cost.
+    let w = area.width;
+    let model_w = app
+        .rows
+        .iter()
+        .filter_map(|(_, r)| match r {
+            RowRef::Session(i) => Some(short_model(app.snap.sessions[*i].t.model.as_deref().unwrap_or("")).chars().count()),
+            RowRef::Agent(i, j) => Some(short_model(&app.snap.sessions[*i].agents[*j].model).chars().count()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(8)
+        .clamp(5, 14) as u16;
+    let keep = [true, true, w >= 130, w >= 76, true, true, w >= 90];
+    let fit = move |v: Vec<Cell<'static>>| Row::new(v.into_iter().zip(keep).filter(|(_, k)| *k).map(|(c, _)| c));
 
     for (idx, (_, r)) in app.rows.iter().enumerate() {
         match r {
@@ -344,7 +391,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let title_style = if live { Style::new().fg(FG).bold() } else { Style::new().fg(MUTED) };
                 let fold = if s.agents.is_empty() {
                     " "
-                } else if app.collapsed.contains(&s.key) {
+                } else if app.is_collapsed(s) {
                     "▸"
                 } else {
                     "▾"
@@ -399,6 +446,17 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     right(money(a.cost), Style::new().fg(MUTED)),
                 ]));
             }
+            RowRef::Divider => {
+                rows.push(fit(vec![
+                    Cell::from(""),
+                    Cell::from(Span::styled("  recently closed", Style::new().fg(FAINT).add_modifier(Modifier::BOLD))),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                ]));
+            }
             RowRef::Terminal(_) | RowRef::Job(..) => {}
             RowRef::Orphan(k) => {
                 let p = &app.snap.orphan_procs[*k];
@@ -430,19 +488,26 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let head_r = |s: &'static str| {
         Cell::from(Line::from(Span::styled(s, Style::new().fg(FAINT).add_modifier(Modifier::BOLD))).alignment(Alignment::Right))
     };
-    let live = app.snap.sessions.iter().filter(|s| s.live()).count();
-    let count = Span::styled(format!("{live} live · {n_rows} rows"), Style::new().fg(MUTED));
+    let live = app.snap.sessions.iter().filter(|s| s.live() || s.running_agents() > 0).count();
+    let recent = app.visible_sessions().count() - live.min(app.visible_sessions().count());
+    let count_text = if app.show_recent { format!("{live} live · {recent} recent") } else { format!("{live} live") };
+    let count = Span::styled(count_text, Style::new().fg(MUTED));
 
-    let mut widths = vec![
+    let widths: Vec<Constraint> = [
         Constraint::Length(1),
         Constraint::Fill(1),
         Constraint::Length(16),
-        Constraint::Length(10),
+        Constraint::Length(model_w),
         Constraint::Length(15),
         Constraint::Length(7),
         Constraint::Length(7),
-    ];
-    let mut header = vec![
+    ]
+    .into_iter()
+    .zip(keep)
+    .filter(|(_, k)| *k)
+    .map(|(c, _)| c)
+    .collect();
+    let header: Vec<Cell> = [
         head(""),
         head("  SESSION"),
         head("WHERE"),
@@ -450,11 +515,12 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         head("STATUS"),
         head_r("TIME"),
         head_r("COST"),
-    ];
-    if !show_where {
-        widths.remove(2);
-        header.remove(2);
-    }
+    ]
+    .into_iter()
+    .zip(keep)
+    .filter(|(_, k)| *k)
+    .map(|(c, _)| c)
+    .collect();
     let table = Table::new(rows, widths)
     .column_spacing(2)
     .header(Row::new(header).bottom_margin(1))
@@ -600,6 +666,8 @@ fn markdown(text: &str, max_lines: usize) -> Vec<Line<'static>> {
 }
 
 fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
+    // paths are shortened to one line (inner width minus borders and padding)
+    let path_w = area.width.saturating_sub(6).max(10) as usize;
     let mut lines: Vec<Line> = Vec::new();
     let title: Line;
     match app.selected().cloned() {
@@ -664,7 +732,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 lines.extend(markdown(t, 200));
             }
             lines.push(Line::default());
-            lines.push(Line::from(Span::styled(home_rel(&s.path.display().to_string()), Style::new().fg(FAINT))));
+            lines.push(Line::from(Span::styled(short_path(&s.path.display().to_string(), path_w), Style::new().fg(FAINT))));
         }
         Some(RowRef::Agent(i, j)) => {
             let s = &app.snap.sessions[i];
@@ -708,7 +776,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             }
             if let Some(p) = &a.path {
                 lines.push(Line::default());
-                lines.push(Line::from(Span::styled(home_rel(&p.display().to_string()), Style::new().fg(FAINT))));
+                lines.push(Line::from(Span::styled(short_path(&p.display().to_string(), path_w), Style::new().fg(FAINT))));
             }
         }
         Some(RowRef::Orphan(k)) => {
@@ -748,7 +816,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::default());
             lines.push(Line::from(Span::styled(home_rel(&p.cwd), Style::new().fg(FAINT))));
         }
-        None => {
+        Some(RowRef::Divider) | None => {
             title = title_line("Details", None);
         }
     }
@@ -804,6 +872,16 @@ fn shell_name(t: &Terminal) -> String {
 }
 
 fn draw_terminal_list(f: &mut Frame, app: &mut App, area: Rect) {
+    // as wide as the longest folder shown, within limits, so RUNNING gets the rest
+    let where_w = app
+        .snap
+        .terminals
+        .iter()
+        .flat_map(|t| std::iter::once(t.cwd()).chain(t.jobs.iter().map(|j| j.cwd.clone())))
+        .map(|c| short_path(&c, 24).chars().count())
+        .max()
+        .unwrap_or(5)
+        .clamp(5, 24);
     let right = |s: String, st: Style| Cell::from(Line::from(Span::styled(s, st)).alignment(Alignment::Right));
     let show_where = area.width >= 110;
     let fit = |mut v: Vec<Cell<'static>>| {
@@ -845,7 +923,7 @@ fn draw_terminal_list(f: &mut Frame, app: &mut App, area: Rect) {
                         v.push(Span::styled(jobs, Style::new().fg(BLUE)));
                         v
                     })),
-                    Cell::from(Span::styled(short_path(&t.cwd(), 22), Style::new().fg(MUTED))),
+                    Cell::from(Span::styled(short_path(&t.cwd(), where_w), Style::new().fg(MUTED))),
                     right(time, Style::new().fg(MUTED)),
                     right(format!("{cpu:.0}%"), Style::new().fg(if cpu >= 5.0 { AMBER } else { MUTED })),
                     right(mem_str(t.mem), Style::new().fg(MUTED)),
@@ -858,7 +936,7 @@ fn draw_terminal_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from(""),
                     Cell::from(Span::styled(if last { "  └─ &" } else { "  ├─ &" }, Style::new().fg(FAINT))),
                     Cell::from(Span::styled(one_line(&p.cmdline, 80), Style::new().fg(SOFT))),
-                    Cell::from(Span::styled(short_path(&p.cwd, 22), Style::new().fg(FAINT))),
+                    Cell::from(Span::styled(short_path(&p.cwd, where_w), Style::new().fg(FAINT))),
                     right(ago(Some(p.start_ms)), Style::new().fg(MUTED)),
                     right(format!("{:.0}%", p.cpu), Style::new().fg(MUTED)),
                     right(mem_str(p.mem), Style::new().fg(MUTED)),
@@ -876,7 +954,7 @@ fn draw_terminal_list(f: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(1),
         Constraint::Length(14),
         Constraint::Fill(1),
-        Constraint::Length(22),
+        Constraint::Length(where_w as u16),
         Constraint::Length(7),
         Constraint::Length(5),
         Constraint::Length(8),
@@ -943,8 +1021,10 @@ fn terminal_detail(t: &Terminal, lines: &mut Vec<Line<'static>>) {
         lines.push(section(&format!("{} session", l.tool.label())));
         lines.push(Line::from(Span::styled(l.title.clone(), Style::new().fg(SOFT))));
         lines.push(Line::from(vec![
+            Span::styled("s", Style::new().fg(FG).bold()),
+            Span::styled(" show it in Sessions   ", Style::new().fg(MUTED)),
             Span::styled("↵", Style::new().fg(FG).bold()),
-            Span::styled(" open it in Sessions", Style::new().fg(MUTED)),
+            Span::styled(" go to this tab", Style::new().fg(MUTED)),
         ]));
     }
     if !t.foreground.is_empty() {

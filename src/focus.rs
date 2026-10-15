@@ -1,0 +1,190 @@
+//! Bring a terminal tab to the front, given its tty.
+//!
+//! - Terminal.app and iTerm2 expose each tab's `tty` to AppleScript, so we select it directly.
+//! - Ghostty's AppleScript has no tty, so we briefly report a unique marker working directory on
+//!   that tty (OSC 7), ask Ghostty which terminal has it, restore the real one, and focus it.
+//! - tmux: select the pane's window and pane, then focus the terminal its client is attached to.
+
+use std::{collections::HashMap, fs::OpenOptions, io::Write, process::Command};
+
+/// Which app owns each tty (from the terminal scan), used to follow a tmux client to its window.
+pub type AppByTty = HashMap<String, String>;
+
+fn osascript(script: &str) -> Result<String, String> {
+    let out = Command::new("osascript").arg("-e").arg(script).output().map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr);
+        // "Not authorized to send Apple events" is the usual one: macOS Automation permission
+        if err.contains("-1743") || err.contains("Not authorized") {
+            Err("macOS blocked it: allow pitop's terminal under System Settings › Privacy & Security › Automation".into())
+        } else {
+            Err(err.lines().last().unwrap_or("osascript failed").trim().to_string())
+        }
+    }
+}
+
+/// AppleScript string literal.
+fn quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Report a working directory for a tty with OSC 7 (`file://localhost/path`, percent-encoded).
+fn set_cwd(dev: &str, path: &str) -> Result<(), String> {
+    let enc: String = path
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    let mut f = OpenOptions::new().write(true).open(dev).map_err(|e| format!("can't write to {dev}: {e}"))?;
+    f.write_all(format!("\x1b]7;file://localhost{enc}\x07").as_bytes()).map_err(|e| e.to_string())
+}
+
+fn ghostty(dev: &str) -> Result<(), String> {
+    // Ghostty's AppleScript has no tty, but it does report each terminal's working directory,
+    // which programs set with OSC 7. Briefly report a unique marker directory on this tty, ask
+    // Ghostty which terminal has it, then put the real directory back. (Titles don't work as a
+    // marker: Ghostty applies a title only once it has been stable for ~100ms, and agents that
+    // animate their title rewrite it faster than that.)
+    let listing = osascript(
+        r#"tell application "Ghostty"
+set out to ""
+repeat with t in terminals
+set out to out & (id of t) & (ASCII character 9) & (working directory of t) & linefeed
+end repeat
+return out
+end tell"#,
+    )?;
+    let dirs: HashMap<String, String> = listing
+        .lines()
+        .filter_map(|l| l.split_once('\t'))
+        .map(|(id, d)| (id.to_string(), d.to_string()))
+        .collect();
+
+    let marker = format!("/tmp/pitop-focus-{}-{}", std::process::id(), crate::data::now_ms());
+    set_cwd(dev, &marker)?;
+    let found = osascript(&format!(
+        r#"set marker to {}
+repeat 30 times
+tell application "Ghostty"
+try
+return id of (first terminal whose working directory is marker)
+end try
+end tell
+delay 0.03
+end repeat
+return """#,
+        quote(&marker)
+    ));
+    let id = found.ok().filter(|id| !id.is_empty());
+    // restore the directory the terminal reported before (home if it had none)
+    let old = id
+        .as_ref()
+        .and_then(|id| dirs.get(id))
+        .filter(|d| d.starts_with('/'))
+        .cloned()
+        .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+    let _ = set_cwd(dev, &old);
+
+    let id = id.ok_or("Ghostty didn't report a terminal for this tty")?;
+    osascript(&format!(
+        "tell application \"Ghostty\"\nfocus (first terminal whose id is {})\nactivate\nend tell",
+        quote(&id)
+    ))?;
+    Ok(())
+}
+
+fn terminal_app(dev: &str) -> Result<(), String> {
+    let r = osascript(&format!(
+        r#"tell application "Terminal"
+repeat with w in windows
+repeat with t in tabs of w
+if tty of t is {dev} then
+set selected tab of w to t
+set index of w to 1
+activate
+return "ok"
+end if
+end repeat
+end repeat
+end tell
+return "missing""#,
+        dev = quote(dev)
+    ))?;
+    if r == "ok" { Ok(()) } else { Err("Terminal has no tab on this tty".into()) }
+}
+
+fn iterm(dev: &str) -> Result<(), String> {
+    let r = osascript(&format!(
+        r#"tell application "iTerm2"
+repeat with w in windows
+repeat with t in tabs of w
+repeat with s in sessions of t
+if tty of s is {dev} then
+select w
+tell t to select
+tell s to select
+activate
+return "ok"
+end if
+end repeat
+end repeat
+end repeat
+end tell
+return "missing""#,
+        dev = quote(dev)
+    ))?;
+    if r == "ok" { Ok(()) } else { Err("iTerm2 has no session on this tty".into()) }
+}
+
+fn tmux(dev: &str, apps: &AppByTty, depth: u8) -> Result<(), String> {
+    let run = |args: &[&str]| -> Result<String, String> {
+        let out = Command::new("tmux").args(args).output().map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    };
+    let panes = run(&["list-panes", "-a", "-F", "#{pane_tty} #{session_name} #{window_id} #{pane_id}"])?;
+    let (session, window, pane) = panes
+        .lines()
+        .find_map(|l| {
+            let f: Vec<&str> = l.split(' ').collect();
+            (f.len() == 4 && f[0] == dev).then(|| (f[1].to_string(), f[2].to_string(), f[3].to_string()))
+        })
+        .ok_or("tmux has no pane on this tty")?;
+    run(&["select-window", "-t", &window])?;
+    run(&["select-pane", "-t", &pane])?;
+    // then raise the terminal the session's client is shown in
+    let clients = run(&["list-clients", "-F", "#{client_tty} #{session_name}"])?;
+    if let Some(client_tty) = clients.lines().find_map(|l| l.split_once(' ').filter(|(_, s)| *s == session).map(|(t, _)| t)) {
+        let short = client_tty.trim_start_matches("/dev/");
+        if let Some(app) = apps.get(short) {
+            if depth == 0 {
+                return focus_with_depth(short, app, apps, 1);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Focus the tab on `tty` (`ttys003`) owned by `app` (as named by the terminal scan).
+pub fn focus(tty: &str, app: &str, apps: &AppByTty) -> Result<(), String> {
+    focus_with_depth(tty, app, apps, 0)
+}
+
+fn focus_with_depth(tty: &str, app: &str, apps: &AppByTty, depth: u8) -> Result<(), String> {
+    let dev = format!("/dev/{tty}");
+    match app {
+        "Ghostty" => ghostty(&dev),
+        "Terminal" => terminal_app(&dev),
+        "iTerm" | "iTerm2" => iterm(&dev),
+        "tmux" => tmux(&dev, apps, depth),
+        "" => Err(format!("No terminal app found for {tty}")),
+        other => Err(format!("pitop can't switch {other} tabs yet")),
+    }
+}

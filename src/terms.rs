@@ -202,7 +202,11 @@ pub fn scan(sys: &System) -> Vec<Terminal> {
             foreground: foreground.iter().filter_map(|r| find(r.pid)).collect(),
             jobs: jobs.iter().filter_map(|r| find(r.pid)).collect(),
             procs: procs.len(),
-            started: leader_info.map(|p| p.start_ms).filter(|&s| s > 0),
+            // `login` runs as root, so its start time may be unreadable; the shell starts with it
+            started: leader_info
+                .map(|p| p.start_ms)
+                .filter(|&s| s > 0)
+                .or_else(|| shell.and_then(|s| find(s.pid)).map(|p| p.start_ms).filter(|&s| s > 0)),
             cpu: infos.iter().map(|p| p.cpu).sum(),
             mem: infos.iter().map(|p| p.mem).sum(),
             session: None,

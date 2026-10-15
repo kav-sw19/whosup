@@ -24,7 +24,7 @@ the sub-agents working inside it, and every open terminal, in one live view.
 │ ●    codex  Fix flaky checkout  gpt-6-sol  waiting for you  4m │ │ add per-key rate limits to /v1, 429 with     │
 │ ○    pi     Write release notes      opus-5-5   closed  1h 20m │ │ Retry-After, and tests                       │
 ╰────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────╯
-  tab terminals  ·  ↑↓ move  ·  ←→ fold  ·  J K scroll  ·  a recent  ·  f finished  ·  q quit
+  tab terminals  ·  ↑↓ move  ·  ↵ go to tab  ·  ←→ fold  ·  J K scroll  ·  a recent  ·  q quit
 ```
 
 <sub>Illustrative preview. The real thing is in colour: each agent has its own tag colour, and spinners show what's working.</sub>
@@ -51,9 +51,11 @@ an agent, sends anything over the network, or changes a file.
   *interrupted* or *error*, updated every second.
 - **Sub-agents nested under their session:** Claude Code Task-tool agents, pi `agent_run` agents
   and pi-subagents background runs, each with its task, model, status, duration and result.
+- **Jump straight to it.** Press `↵` on a session or terminal and its tab comes to the front, in
+  Ghostty, iTerm2, Terminal or tmux.
 - **A Terminals tab** listing every open terminal: its tty, the app that owns it (Ghostty, iTerm2,
   Terminal, tmux, ssh, …), the foreground command, background jobs, folder, CPU and memory.
-  `↵` on a terminal jumps to the agent session inside it.
+  `s` on a terminal shows the agent session inside it.
 - **A details pane** with the last prompt and reply (lightly formatted Markdown), turns, tool calls,
   tokens, context size and, for pi, cost.
 - **Fast on large histories.** Transcripts are read incrementally, so multi-megabyte sessions cost
@@ -83,6 +85,7 @@ pitop --once               # print live sessions and open terminals, then exit
 pitop --once --all         # also include sessions closed in the last 24 hours
 pitop --recent 72          # with `a`, show sessions closed in the last 72 hours
 pitop --dir ~/my-pi-dir    # use a different pi data folder
+pitop --focus ttys003      # bring that tty's tab to the front, then exit
 ```
 
 ### Keys
@@ -91,8 +94,9 @@ pitop --dir ~/my-pi-dir    # use a different pi data folder
 | --- | --- |
 | `tab` · `1` · `2` | Switch between Sessions and Terminals |
 | `↑` `↓` · `j` `k` | Move the selection (`PgUp` / `PgDn`, `g` / `G` jump) |
-| `←` `→` · `h` `l` | Collapse or expand a session's sub-agents |
-| `↵` | On a terminal: open the agent session running in it |
+| `←` `→` · `h` `l` | Collapse or expand a session's sub-agents (closed sessions start collapsed) |
+| `↵` | Bring the selected session's (or terminal's) tab to the front |
+| `s` | On a terminal: show the agent session running in it |
 | `J` `K` | Scroll the details pane |
 | `a` | Show recently closed sessions as well as live ones |
 | `f` | Hide finished sub-agents |
@@ -139,6 +143,19 @@ Only pi records cost in its transcript; Claude Code and Codex sessions show toke
 Codex desktop-app threads have no process of their own, so they count as live while Codex.app is
 running and the thread was written to in the last 10 minutes (if working) or 30 minutes (if idle).
 
+## Jumping to a tab
+
+`↵` finds the terminal tab a session runs in and brings it to the front:
+
+| Terminal | How |
+| --- | --- |
+| **Ghostty** | Its AppleScript doesn't expose ttys, so pitop briefly reports a unique working directory on the session's tty (OSC 7), asks Ghostty which terminal has it, restores the real directory, and focuses that terminal. |
+| **iTerm2**, **Terminal** | Selected directly by tty through AppleScript. |
+| **tmux** | Selects the pane and its window, then brings up the terminal its client is attached to. |
+
+The first time pitop controls an app other than the one it runs in, macOS asks for Automation
+permission. Codex desktop-app threads have no terminal, so `↵` explains that instead.
+
 ## Platform support
 
 Built and tested on **macOS**. The process and terminal scanning uses `ps` and
@@ -153,6 +170,7 @@ tested there. Windows is not supported.
 - opencode keeps its history in SQLite, so it (like the other process-only agents) shows no prompt,
   reply or status yet.
 - tmux panes show `tmux` as their app rather than the terminal window they're displayed in.
+- Jumping to tabs in other terminal apps (WezTerm, kitty, Alacritty, Warp, VS Code) isn't supported yet.
 - Text you've typed into an agent but not sent isn't visible, so that session still shows
   *waiting for you*.
 
@@ -172,6 +190,7 @@ cargo test --release render -- --ignored --nocapture
 | `src/data.rs` | Session discovery, incremental transcript cache, process matching, sub-agents |
 | `src/providers.rs` | Agent detection, plus the Claude Code and Codex transcript parsers |
 | `src/terms.rs` | Terminal discovery: ttys, foreground commands, jobs, owning app |
+| `src/focus.rs` | Bringing a tty's tab to the front (Ghostty, iTerm2, Terminal, tmux) |
 | `src/ui.rs` | Rendering: palette, tabs, lists, details pane |
 
 Adding an agent with a JSONL transcript means adding it to `Tool`, writing an `ingest_*` parser in
