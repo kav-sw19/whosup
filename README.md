@@ -1,4 +1,9 @@
-# whosup
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/logo/whosup-light.svg">
+    <img alt="whosup" src="docs/logo/whosup-dark.svg" width="360">
+  </picture>
+</h1>
 
 **`top` for your coding agents.** See every Claude Code, Codex, pi, opencode, Gemini CLI and aider
 session you have running, what each one is doing and whether it needs you, plus the terminals and
@@ -342,7 +347,7 @@ whosup runs on **macOS** (Apple Silicon and Intel).
 The README images are the real UI rendered from `--demo` data, cell by cell:
 
 ```sh
-cargo test --release screenshots -- --ignored      # writes docs/*.svg
+cargo test --release screenshots -- --ignored      # writes docs/*.svg and the logo, docs/logo/*.svg
 swiftc -O docs/svg2png.swift -o /tmp/svg2png
 for f in docs/*.svg; do /tmp/svg2png "$f" "${f%.svg}.png" 2; done && rm docs/*.svg
 

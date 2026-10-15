@@ -367,6 +367,39 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
 }
 
 /// Four lines of half-block art; letters run blue → violet with the shadow behind them.
+/// The wordmark as an SVG image (for the README): the same pixels and gradient as the header,
+/// with a transparent background, drawn for the current theme.
+pub fn wordmark_svg() -> String {
+    let px = wordmark_pixels("WHOSUP");
+    let (w, h) = (px[0].len(), px.len());
+    let p = pal();
+    let hex = |c: Color| match c {
+        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        _ => "#888888".into(),
+    };
+    // one pixel is half a terminal cell: about 6 wide by 5 tall
+    let (pw, ph) = (12, 10);
+    let mut out = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='{}' height='{}' viewBox='0 0 {} {}' shape-rendering='crispEdges'>",
+        w * pw / 2,
+        h * ph / 2,
+        w * pw,
+        h * ph
+    );
+    for (y, row) in px.iter().enumerate() {
+        for (x, &v) in row.iter().enumerate() {
+            let c = match v {
+                1 => mix(p.blue, p.violet, x as f32 / (w.max(2) - 1) as f32),
+                2 => p.shadow,
+                _ => continue,
+            };
+            out.push_str(&format!("<rect x='{}' y='{}' width='{pw}' height='{ph}' fill='{}'/>", x * pw, y * ph, hex(c)));
+        }
+    }
+    out.push_str("</svg>\n");
+    out
+}
+
 fn wordmark() -> Vec<Line<'static>> {
     let px = wordmark_pixels("WHOSUP");
     let w = px[0].len();

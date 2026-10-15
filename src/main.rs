@@ -1790,6 +1790,13 @@ mod screenshots {
         shot(false, View::Sessions, 1, 150, 27, "whosup-dark.svg");
         shot(false, View::Terminals, 1, 150, 22, "whosup-terminals.svg");
         shot(false, View::Ports, 1, 150, 24, "whosup-ports.svg");
+        // the README's title: the header wordmark, for GitHub's dark and light themes
+        std::fs::create_dir_all("docs/logo").unwrap();
+        for (light, file) in [(false, "docs/logo/whosup-dark.svg"), (true, "docs/logo/whosup-light.svg")] {
+            ui::set_light(light);
+            std::fs::write(file, ui::wordmark_svg()).unwrap();
+        }
+        ui::set_light(false);
     }
 }
 
