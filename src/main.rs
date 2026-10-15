@@ -1788,7 +1788,6 @@ mod screenshots {
     #[ignore]
     fn screenshots() {
         shot(false, View::Sessions, 1, 150, 27, "whosup-dark.svg");
-        shot(true, View::Sessions, 7, 150, 27, "whosup-light.svg");
         shot(false, View::Terminals, 1, 150, 22, "whosup-terminals.svg");
         shot(false, View::Ports, 1, 150, 24, "whosup-ports.svg");
     }
