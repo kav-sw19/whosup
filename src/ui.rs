@@ -640,6 +640,23 @@ fn draw_convo(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if let Some((pid, title, tty, _)) = &app.stopping {
+        let p = pal();
+        let mut spans = vec![
+            Span::styled(" stop ", Style::new().fg(p.on_accent).bg(p.red).bold()),
+            Span::styled(format!("  “{}” (pid {pid})?   ", one_line(title, 40)), Style::new().fg(p.fg)),
+        ];
+        if tty.is_some() {
+            spans.push(Span::styled("i", Style::new().fg(p.soft).bold()));
+            spans.push(Span::styled(" interrupt its turn (Esc)  ·  ", Style::new().fg(p.muted)));
+        }
+        spans.push(Span::styled("k", Style::new().fg(p.red).bold()));
+        spans.push(Span::styled(" end the session  ·  ", Style::new().fg(p.muted)));
+        spans.push(Span::styled("any other key", Style::new().fg(p.soft).bold()));
+        spans.push(Span::styled(" cancel", Style::new().fg(p.muted)));
+        f.render_widget(Line::from(spans), area);
+        return;
+    }
     if app.copying {
         let p = pal();
         let mut spans = vec![Span::styled(" copy ", Style::new().fg(p.on_accent).bg(p.blue).bold()), Span::raw("  ")];
@@ -723,6 +740,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("v", "conversation", None, 4),
             ("y", "copy", None, 6),
             ("e", "export", None, 7),
+            ("x", "stop", None, 7),
             ("n", "notify", Some(app.settings.notify), 4),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),

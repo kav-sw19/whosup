@@ -98,6 +98,7 @@ whosup --recent 72          # with `a`, show sessions closed in the last 72 hour
 whosup --dir ~/my-pi-dir    # use a different pi data folder
 whosup --focus ttys003      # bring that tty's tab to the front, then exit
 whosup --resume "auth"      # resume the closed session whose title matches "auth"
+whosup --interrupt ttys003  # press Esc in that tty's tab
 ```
 
 ### Keys
@@ -114,6 +115,7 @@ whosup --resume "auth"      # resume the closed session whose title matches "aut
 | `v` | Read the whole conversation of the selected session or sub-agent (`v` / `esc` closes) |
 | `y` then `r` `i` `f` `d` `l` | Copy the resume command, session id, transcript path, folder or last reply |
 | `e` | Export the conversation to Markdown in `~/Downloads` |
+| `x` | Stop a live session: then `i` interrupts its turn (presses Esc in its Ghostty or iTerm2 tab) or `k` ends it (SIGTERM) |
 | `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
 | `f` | Hide finished sub-agents |
 | `p` | Group sessions by project (their git repository, else their folder) |

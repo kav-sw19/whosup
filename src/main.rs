@@ -42,6 +42,7 @@ KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to t
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details
       a history: live only → recent → 7 days → all · p group by project · v read the conversation
       y copy (r resume command, i id, f file, d folder, l last reply) · e export to Markdown
+      x stop a live session (asks: i interrupt its turn with Esc, k end it)
       f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
@@ -166,6 +167,8 @@ pub struct App {
     projects: std::collections::HashMap<String, String>,
     /// waiting for the second key of `y` (copy what?)
     pub copying: bool,
+    /// asking how to stop a session (`x`): its pid, title, tty and terminal app
+    pub stopping: Option<(u32, String, Option<String>, String)>,
     /// search text (`/`); every word must match
     pub query: String,
     /// typing into the search box
@@ -297,6 +300,7 @@ impl App {
             query: String::new(),
             searching: false,
             copying: false,
+            stopping: None,
         };
         ui::set_light(a.settings.light);
         a
@@ -333,6 +337,41 @@ impl App {
         match export::copy(&text) {
             Ok(()) => self.flash(format!("Copied the {what}"), false),
             Err(e) => self.flash(format!("Couldn't copy: {e}"), true),
+        }
+    }
+
+    /// `x`: ask how to stop the selected live session.
+    fn ask_stop(&mut self) {
+        let Some(s) = self.selected_session() else { return self.flash("Select a session first", true) };
+        let Some(p) = &s.proc else { return self.flash("This session isn't running", true) };
+        let app = s
+            .tty
+            .as_ref()
+            .and_then(|t| self.snap.terminals.iter().find(|x| &x.tty == t))
+            .map(|t| t.app.clone())
+            .unwrap_or_default();
+        self.stopping = Some((p.pid, s.title(), s.tty.clone(), app));
+    }
+
+    /// The answer to `x`: `i` interrupt the turn (Esc), `k` end the session.
+    fn stop(&mut self, how: char) {
+        let Some((pid, title, tty, app)) = self.stopping.take() else { return };
+        let tx = self.focus_tx.clone();
+        match (how, tty) {
+            ('i', Some(tty)) => {
+                self.flash("Pressing Esc…", false);
+                std::thread::spawn(move || {
+                    let _ = tx.send(focus::send_escape(&tty, &app));
+                });
+            }
+            ('i', None) => self.flash("This session has no terminal to press Esc in", true),
+            ('k', _) => {
+                self.flash(format!("Ending “{}”…", ui::one_line(&title, 40)), false);
+                std::thread::spawn(move || {
+                    let _ = tx.send(focus::terminate(pid));
+                });
+            }
+            _ => self.flash("Left it running", false),
         }
     }
 
@@ -912,6 +951,12 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     }
                     continue;
                 }
+                // the key after `x`: how to stop it
+                if app.stopping.is_some() {
+                    let c = if let KeyCode::Char(c) = k.code { c } else { ' ' };
+                    app.stop(c);
+                    continue;
+                }
                 // the key after `y`: what to copy
                 if app.copying {
                     app.copying = false;
@@ -969,6 +1014,7 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     KeyCode::Char('v') if app.view == View::Sessions => app.open_convo(),
                     KeyCode::Char('y') if app.view == View::Sessions => app.copying = true,
                     KeyCode::Char('e') if app.view == View::Sessions => app.export_session(),
+                    KeyCode::Char('x') if app.view == View::Sessions => app.ask_stop(),
                     KeyCode::Char('p') if app.view == View::Sessions => {
                         app.group = !app.group;
                         app.rebuild_rows();
@@ -1056,6 +1102,20 @@ fn main() -> std::io::Result<()> {
                     resume::launch(&p)
                 });
                 match result {
+                    Ok(m) => println!("{m}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
+            // press Esc in a tty's terminal (what `x` then `i` does), e.g. `whosup --interrupt ttys003`
+            "--interrupt" => {
+                let tty = args.next().unwrap_or_default();
+                let terms = crate::terms::scan(&sysinfo::System::new_all());
+                let app = terms.iter().find(|t| t.tty == tty).map(|t| t.app.clone()).unwrap_or_default();
+                match focus::send_escape(&tty, &app) {
                     Ok(m) => println!("{m}"),
                     Err(e) => {
                         eprintln!("{e}");

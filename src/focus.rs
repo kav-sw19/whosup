@@ -44,6 +44,16 @@ fn set_cwd(dev: &str, path: &str) -> Result<(), String> {
 }
 
 fn ghostty(dev: &str) -> Result<(), String> {
+    let id = ghostty_terminal(dev)?;
+    osascript(&format!(
+        "tell application \"Ghostty\"\nfocus (first terminal whose id is {})\nactivate\nend tell",
+        quote(&id)
+    ))?;
+    Ok(())
+}
+
+/// Ghostty's id for the terminal on this tty (see `ghostty` for how).
+fn ghostty_terminal(dev: &str) -> Result<String, String> {
     // Ghostty's AppleScript has no tty, but it does report each terminal's working directory,
     // which programs set with OSC 7. Briefly report a unique marker directory on this tty, ask
     // Ghostty which terminal has it, then put the real directory back. (Titles don't work as a
@@ -89,12 +99,62 @@ return """#,
         .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
     let _ = set_cwd(dev, &old);
 
-    let id = id.ok_or("Ghostty didn't report a terminal for this tty")?;
-    osascript(&format!(
-        "tell application \"Ghostty\"\nfocus (first terminal whose id is {})\nactivate\nend tell",
-        quote(&id)
-    ))?;
-    Ok(())
+    id.ok_or_else(|| "Ghostty didn't report a terminal for this tty".to_string())
+}
+
+/// Press Esc in the terminal on `tty`: what you'd do to interrupt an agent's turn.
+pub fn send_escape(tty: &str, app: &str) -> Result<String, String> {
+    let dev = format!("/dev/{tty}");
+    match app {
+        "Ghostty" => {
+            let id = ghostty_terminal(&dev)?;
+            osascript(&format!("tell application \"Ghostty\" to send key \"escape\" to (first terminal whose id is {})", quote(&id)))?;
+        }
+        "iTerm" | "iTerm2" => {
+            let r = osascript(&format!(
+                r#"tell application "iTerm2"
+repeat with w in windows
+repeat with t in tabs of w
+repeat with s in sessions of t
+if tty of s is {dev} then
+tell s to write text (ASCII character 27) newline NO
+return "ok"
+end if
+end repeat
+end repeat
+end repeat
+end tell
+return "missing""#,
+                dev = quote(&dev)
+            ))?;
+            if r != "ok" {
+                return Err("iTerm2 has no session on this tty".into());
+            }
+        }
+        other => return Err(format!("whosup can't press keys in {other}; switch to it with ↵ and press Esc")),
+    }
+    Ok(format!("Pressed Esc in {}", tty.trim_start_matches("tty")))
+}
+
+/// End a process politely (SIGTERM) and report whether it's gone after a moment.
+pub fn terminate(pid: u32) -> Result<String, String> {
+    let ok = std::process::Command::new("kill").args(["-TERM", &pid.to_string()]).status().map_err(|e| e.to_string())?;
+    if !ok.success() {
+        return Err(format!("Couldn't stop pid {pid}"));
+    }
+    for _ in 0..30 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // gone, or a zombie waiting to be collected by its parent: either way it has ended
+        let stat = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if stat.is_empty() || stat.starts_with('Z') {
+            return Ok(format!("Ended pid {pid}"));
+        }
+    }
+    Err(format!("pid {pid} is still running after 3s (it may be finishing up)"))
 }
 
 fn terminal_app(dev: &str) -> Result<(), String> {
@@ -198,5 +258,16 @@ fn focus_with_depth(tty: &str, app: &str, apps: &AppByTty, depth: u8) -> Result<
         // editors (VS Code, Cursor, Zed, JetBrains, Atom, …) don't let other apps pick a
         // terminal panel, so bring the editor's window forward
         editor => activate_app(editor).map(|_| format!("Brought {editor} to the front (its terminal is {short})")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn terminate_ends_a_process() {
+        let mut child = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        assert_eq!(super::terminate(pid), Ok(format!("Ended pid {pid}")));
+        child.wait().ok();
     }
 }
