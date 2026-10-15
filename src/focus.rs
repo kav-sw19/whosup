@@ -18,7 +18,7 @@ fn osascript(script: &str) -> Result<String, String> {
         let err = String::from_utf8_lossy(&out.stderr);
         // "Not authorized to send Apple events" is the usual one: macOS Automation permission
         if err.contains("-1743") || err.contains("Not authorized") {
-            Err("macOS blocked it: allow pitop's terminal under System Settings › Privacy & Security › Automation".into())
+            Err("macOS blocked it: allow whosup's terminal under System Settings › Privacy & Security › Automation".into())
         } else {
             Err(err.lines().last().unwrap_or("osascript failed").trim().to_string())
         }
@@ -64,7 +64,7 @@ end tell"#,
         .map(|(id, d)| (id.to_string(), d.to_string()))
         .collect();
 
-    let marker = format!("/tmp/pitop-focus-{}-{}", std::process::id(), crate::data::now_ms());
+    let marker = format!("/tmp/whosup-focus-{}-{}", std::process::id(), crate::data::now_ms());
     set_cwd(dev, &marker)?;
     let found = osascript(&format!(
         r#"set marker to {}
@@ -140,7 +140,7 @@ return "missing""#,
     if r == "ok" { Ok(()) } else { Err("iTerm2 has no session on this tty".into()) }
 }
 
-fn tmux(dev: &str, apps: &AppByTty, depth: u8) -> Result<(), String> {
+fn tmux(dev: &str, apps: &AppByTty, depth: u8) -> Result<String, String> {
     let run = |args: &[&str]| -> Result<String, String> {
         let out = Command::new("tmux").args(args).output().map_err(|e| e.to_string())?;
         if out.status.success() {
@@ -169,22 +169,34 @@ fn tmux(dev: &str, apps: &AppByTty, depth: u8) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok(String::new())
+}
+
+/// Bring an app to the front (editors, desktop apps).
+pub fn activate_app(app: &str) -> Result<String, String> {
+    osascript(&format!("tell application {} to activate", quote(app)))?;
+    Ok(format!("Brought {app} to the front"))
 }
 
 /// Focus the tab on `tty` (`ttys003`) owned by `app` (as named by the terminal scan).
-pub fn focus(tty: &str, app: &str, apps: &AppByTty) -> Result<(), String> {
+/// Returns a short message saying what happened.
+pub fn focus(tty: &str, app: &str, apps: &AppByTty) -> Result<String, String> {
     focus_with_depth(tty, app, apps, 0)
 }
 
-fn focus_with_depth(tty: &str, app: &str, apps: &AppByTty, depth: u8) -> Result<(), String> {
+fn focus_with_depth(tty: &str, app: &str, apps: &AppByTty, depth: u8) -> Result<String, String> {
     let dev = format!("/dev/{tty}");
+    let short = tty.trim_start_matches("tty");
+    let done = |r: Result<(), String>| r.map(|_| format!("Switched to {short} in {app}"));
     match app {
-        "Ghostty" => ghostty(&dev),
-        "Terminal" => terminal_app(&dev),
-        "iTerm" | "iTerm2" => iterm(&dev),
-        "tmux" => tmux(&dev, apps, depth),
-        "" => Err(format!("No terminal app found for {tty}")),
-        other => Err(format!("pitop can't switch {other} tabs yet")),
+        "Ghostty" => done(ghostty(&dev)),
+        "Terminal" => done(terminal_app(&dev)),
+        "iTerm" | "iTerm2" => done(iterm(&dev)),
+        "tmux" => tmux(&dev, apps, depth).map(|m| if m.is_empty() { format!("Switched to the tmux pane on {short}") } else { m }),
+        "" | "terminal" => Err(format!("No terminal app found for {short}")),
+        "ssh" | "screen" | "zellij" => Err(format!("{short} is inside {app}; whosup can't switch to it")),
+        // editors (VS Code, Cursor, Zed, JetBrains, Atom, …) don't let other apps pick a
+        // terminal panel, so bring the editor's window forward
+        editor => activate_app(editor).map(|_| format!("Brought {editor} to the front (its terminal is {short})")),
     }
 }

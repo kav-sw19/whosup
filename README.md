@@ -1,38 +1,47 @@
 <div align="center">
 
-# pitop
+```
+██    ██ ██  ██  ████   █████ ██  ██ █████
+██    ██ ██  ██ ██  ██ ██     ██  ██ ██  ██
+██    ██ ██  ██ ██  ██ ██     ██  ██ ██  ██
+██ ██ ██ ██████ ██  ██  ████  ██  ██ █████
+██ ██ ██ ██  ██ ██  ██     ██ ██  ██ ██
+████████ ██  ██ ██  ██     ██ ██  ██ ██
+ ██  ██  ██  ██  ████  █████   ████  ██
+```
 
 **`top` for your coding agents.**
 
-See every pi, Claude Code and Codex session you have running, what each one is doing right now,
-the sub-agents working inside it, and every open terminal, in one live view.
+See every pi, Claude Code and Codex session you have running (in a terminal, an editor's
+terminal or an editor extension), what each one is doing right now, the sub-agents working inside
+it, and every open terminal. Press `↵` to jump straight to its tab.
 
 </div>
 
 ```
- pitop   1 Sessions 3   2 Terminals 5    ⠹ 2 working   ◆ 3 agents                          $4.18 in live sessions
-╭ Sessions 3 live · 9 rows ──────────────────────────────────────╮ ╭ Session claude ──────────────────────────────╮
-│                                                                │ │                                              │
-│      SESSION                         MODEL      STATUS    TIME │ │ Add rate limiting to the public API          │
-│                                                                │ │ ⠹ Edit  ·  in s002  ·  pid 48211  ·  up 12m  │
-│▌⠹  ▾ claude Add rate limiting to th  opus-4-8   Edit       now │ │ ~/code/api  ·  claude-opus-4-8               │
-│      ├─ ⠹ a3f91c0  Find every route  opus-4-8   Grep        8s │ │                                              │
-│      └─ ✓ b72d4e1  Check Redis clie  haiku-4-5  done    1m 02s │ │ 23 turns    31 tools    1.2M tokens          │
-│ ⠹  ▾ pi     Migrate auth to OAuth 2  opus-5-5   thinking   12s │ │ 2/3 running                                  │
-│      ├─ ⠹ scout-1  Map the session   haiku-5-5  read       31s │ │                                              │
-│      └─ ✓ scout-2  List OAuth provi  haiku-5-5  done       44s │ │ LAST PROMPT                                  │
-│ ●    codex  Fix flaky checkout  gpt-6-sol  waiting for you  4m │ │ add per-key rate limits to /v1, 429 with     │
-│ ○    pi     Write release notes      opus-5-5   closed  1h 20m │ │ Retry-After, and tests                       │
-╰────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────────╯
-  tab terminals  ·  ↑↓ move  ·  ↵ go to tab  ·  ←→ fold  ·  J K scroll  ·  a recent  ·  q quit
+╭ Sessions 3 live · 1 recent ──────────────────────────────────────────╮ ╭ Session claude ──────────────────────────╮
+│                                                                      │ │                                          │
+│      SESSION                         IN       STATUS            TIME │ │ Add rate limiting to the public API      │
+│                                                                      │ │  ↵  go to s002 in Ghostty                │
+│▌⠹  ▾ claude Add rate limiting to th  s002     Edit               now │ │                                          │
+│      ├─ ⠹ a3f91c0  Find every route           Grep                8s │ │ ⠹ Edit  ·  in s002  ·  pid 48211  ·  12m │
+│      └─ ✓ b72d4e1  Check Redis clie           done            1m 02s │ │ ~/code/api  ·  claude-opus-4-8           │
+│ ⠹  ▾ pi     Migrate auth to OAuth 2  VS Code  thinking           12s │ │                                          │
+│      └─ ⠹ scout-1  Map the session            read               31s │ │ 23 turns    31 tools    1.2M tokens      │
+│ ●    codex  Fix flaky checkout test  Codex    waiting for you     4m │ │                                          │
+│      recently closed                                                 │ │ LAST PROMPT                              │
+│ ○    pi     Write release notes                closed         1h 20m │ │ add per-key rate limits to /v1, 429 with │
+╰──────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────╯
+  ↵ go to its tab  ·  tab terminals  ·  ↑↓ move  ·  ←→ fold  ·  a recent  ·  t theme  ·  q quit
 ```
 
-<sub>Illustrative preview. The real thing is in colour: each agent has its own tag colour, and spinners show what's working.</sub>
+<sub>Illustrative preview of the main view. In the terminal it's in colour, with the WHOSUP wordmark
+in the header, a light and a dark theme (<code>t</code>), and spinners on whatever is working.</sub>
 
 ## Why
 
 Coding agents run for minutes at a time, start sub-agents of their own, and end up spread across
-terminal tabs. pitop answers the questions you'd otherwise answer by clicking through every tab:
+terminal tabs. whosup answers the questions you'd otherwise answer by clicking through every tab:
 
 - **Which sessions are working, and which are waiting for me?**
 - **What is each one doing right now?** Thinking, or running `bash`, `Edit`, `Grep`, …
@@ -44,7 +53,9 @@ an agent, sends anything over the network, or changes a file.
 
 ## Features
 
-- **Every agent in one list.** pi, Claude Code and Codex sessions are read from their transcripts.
+- **Every agent in one list, wherever it runs.** pi, Claude Code and Codex sessions are read from
+  their transcripts, whether they run in a terminal app, in an editor's integrated terminal (VS Code,
+  Cursor, Zed, JetBrains, Atom, …) or inside an editor extension (Claude Code for VS Code, Codex).
   Other agent CLIs (opencode, gemini, aider, amp, goose, crush, qwen, cursor-agent, copilot, droid)
   are found by their process.
 - **Live status.** Each session shows *thinking*, the tool it's running, *waiting for you*,
@@ -52,7 +63,9 @@ an agent, sends anything over the network, or changes a file.
 - **Sub-agents nested under their session:** Claude Code Task-tool agents, pi `agent_run` agents
   and pi-subagents background runs, each with its task, model, status, duration and result.
 - **Jump straight to it.** Press `↵` on a session or terminal and its tab comes to the front, in
-  Ghostty, iTerm2, Terminal or tmux.
+  Ghostty, iTerm2, Terminal or tmux; for sessions in an editor, the editor comes to the front. The
+  **IN** column shows where each one lives, and the details pane says what `↵` will do.
+- **Light and dark themes.** Press `t` to switch; whosup remembers your choice.
 - **A Terminals tab** listing every open terminal: its tty, the app that owns it (Ghostty, iTerm2,
   Terminal, tmux, ssh, …), the foreground command, background jobs, folder, CPU and memory.
   `s` on a terminal shows the agent session inside it.
@@ -60,32 +73,32 @@ an agent, sends anything over the network, or changes a file.
   tokens, context size and, for pi, cost.
 - **Fast on large histories.** Transcripts are read incrementally, so multi-megabyte sessions cost
   almost nothing after the first read.
-- **Scriptable.** `pitop --once` prints a plain-text snapshot instead of opening the UI.
+- **Scriptable.** `whosup --once` prints a plain-text snapshot instead of opening the UI.
 
 ## Install
 
 Requires Rust 1.85 or newer.
 
 ```sh
-cargo install --git https://github.com/kav-sw19/pitop
+cargo install --git https://github.com/kav-sw19/whosup
 ```
 
 Or from a clone:
 
 ```sh
-git clone https://github.com/kav-sw19/pitop && cd pitop
+git clone https://github.com/kav-sw19/whosup && cd whosup
 cargo install --path .
 ```
 
 ## Usage
 
 ```sh
-pitop                      # live view, refreshes every second
-pitop --once               # print live sessions and open terminals, then exit
-pitop --once --all         # also include sessions closed in the last 24 hours
-pitop --recent 72          # with `a`, show sessions closed in the last 72 hours
-pitop --dir ~/my-pi-dir    # use a different pi data folder
-pitop --focus ttys003      # bring that tty's tab to the front, then exit
+whosup                      # live view, refreshes every second
+whosup --once               # print live sessions and open terminals, then exit
+whosup --once --all         # also include sessions closed in the last 24 hours
+whosup --recent 72          # with `a`, show sessions closed in the last 72 hours
+whosup --dir ~/my-pi-dir    # use a different pi data folder
+whosup --focus ttys003      # bring that tty's tab to the front, then exit
 ```
 
 ### Keys
@@ -100,6 +113,7 @@ pitop --focus ttys003      # bring that tty's tab to the front, then exit
 | `J` `K` | Scroll the details pane |
 | `a` | Show recently closed sessions as well as live ones |
 | `f` | Hide finished sub-agents |
+| `t` | Switch between the dark and light theme (remembered in `~/.config/whosup/theme`) |
 | `r` | Refresh now |
 | `q` · `Esc` | Quit |
 
@@ -127,9 +141,19 @@ Sub-agents show ✓ **done**, ✗ **error**, or ◌ **orphaned** when the sessio
 
 Only pi records cost in its transcript; Claude Code and Codex sessions show token counts instead.
 
+## Sessions in editors
+
+whosup finds agents by their process, so it sees them wherever they run:
+
+- **An editor's integrated terminal.** The agent runs on a terminal like any other; whosup names the
+  editor by walking the process's parents up to its app (`Visual Studio Code`, `Cursor`, `Zed`, …).
+- **An editor extension.** Claude Code for VS Code starts a `claude` process per chat, which is
+  matched to its transcript as usual. The Codex extension runs one `codex app-server` for all its
+  threads, so its threads count as live while it runs and they were written to recently.
+
 ## How it works
 
-1. **Find agent processes.** pitop scans the process list and recognises agent CLIs by their command
+1. **Find agent processes.** whosup scans the process list and recognises agent CLIs by their command
    name, including ones launched through `node` or `bun`.
 2. **Read transcripts.** It reads the JSONL transcripts each agent writes, and each format is mapped
    onto one common summary: title, model, turns, tool calls, tokens and the last thing that happened.
@@ -149,12 +173,15 @@ running and the thread was written to in the last 10 minutes (if working) or 30 
 
 | Terminal | How |
 | --- | --- |
-| **Ghostty** | Its AppleScript doesn't expose ttys, so pitop briefly reports a unique working directory on the session's tty (OSC 7), asks Ghostty which terminal has it, restores the real directory, and focuses that terminal. |
+| **Ghostty** | Its AppleScript doesn't expose ttys, so whosup briefly reports a unique working directory on the session's tty (OSC 7), asks Ghostty which terminal has it, restores the real directory, and focuses that terminal. |
 | **iTerm2**, **Terminal** | Selected directly by tty through AppleScript. |
 | **tmux** | Selects the pane and its window, then brings up the terminal its client is attached to. |
 
-The first time pitop controls an app other than the one it runs in, macOS asks for Automation
-permission. Codex desktop-app threads have no terminal, so `↵` explains that instead.
+| **Editors** (VS Code, Cursor, Zed, JetBrains, Atom, …) | Editors don't let other apps pick one of their terminal panels, so the editor's window comes to the front. Agents running in an editor extension (no terminal) do the same. |
+| **Codex desktop app** | Codex.app comes to the front. |
+
+The first time whosup controls an app other than the one it runs in, macOS asks for Automation
+permission.
 
 ## Platform support
 
@@ -180,7 +207,7 @@ tested there. Windows is not supported.
 cargo build --release
 cargo test
 
-# render both tabs from your real data to stdout (and colour previews to /tmp/pitop-*.html)
+# render both tabs from your real data to stdout (and colour previews to /tmp/whosup-*.html)
 cargo test --release render -- --ignored --nocapture
 ```
 

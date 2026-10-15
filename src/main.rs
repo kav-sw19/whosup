@@ -18,9 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-const HELP: &str = "pitop — live view of coding-agent sessions (pi, Claude Code, Codex, …), their sub-agents and open terminals
+const HELP: &str = "whosup — live view of coding-agent sessions (pi, Claude Code, Codex, …), their sub-agents and open terminals
 
-USAGE: pitop [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focus <tty>]
+USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focus <tty>]
 
   --dir      pi agent dir (default: $PI_CODING_AGENT_DIR or ~/.pi/agent); Claude Code and Codex
              use $CLAUDE_CONFIG_DIR (~/.claude) and $CODEX_HOME (~/.codex)
@@ -29,7 +29,7 @@ USAGE: pitop [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focus
 
 KEYS: tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details · a all-recent/live-only
-      f hide finished agents · g/G top/bottom · r refresh · q quit";
+      f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
 pub enum RowRef {
@@ -46,6 +46,11 @@ pub enum RowRef {
 pub enum View {
     Sessions,
     Terminals,
+}
+
+pub enum Target {
+    Tty(String),
+    App(String),
 }
 
 /// A short message shown in place of the key hints.
@@ -214,6 +219,27 @@ impl App {
         self.flash = Some(Flash { text: text.into(), error, at: Instant::now() });
     }
 
+    /// Where Enter should take you: a terminal tab, or (no tty) the app the session runs in.
+    fn selected_target(&self) -> Result<Target, String> {
+        match self.selected_tty() {
+            Ok(tty) => Ok(Target::Tty(tty)),
+            Err(e) => {
+                let host = match self.selected() {
+                    Some(RowRef::Session(i)) | Some(RowRef::Agent(i, _)) => {
+                        let s = &self.snap.sessions[*i];
+                        s.live().then(|| s.host.clone()).flatten()
+                    }
+                    Some(RowRef::Orphan(k)) => self.snap.orphan_procs[*k].host.clone(),
+                    _ => None,
+                };
+                match host.as_deref() {
+                    Some("editor") | None => Err(e),
+                    Some(app) => Ok(Target::App(app.to_string())),
+                }
+            }
+        }
+    }
+
     /// The tty of whatever is selected: a terminal, or the terminal a session runs in.
     fn selected_tty(&self) -> Result<String, String> {
         let term_of_pid = |pid: u32| {
@@ -227,12 +253,12 @@ impl App {
                     return Ok(tty.clone());
                 }
                 if s.app_live {
-                    return Err(format!("This {} thread lives in the desktop app, not a terminal", s.tool.label()));
+                    return Err(format!("This {} thread runs in an app, not a terminal", s.tool.label()));
                 }
                 if !s.live() {
                     return Err("This session is closed".into());
                 }
-                Err("This session isn't running in a terminal pitop can see".into())
+                Err("This session isn't running in a terminal whosup can see".into())
             }
             Some(RowRef::Orphan(k)) => {
                 term_of_pid(self.snap.orphan_procs[*k].pid).ok_or_else(|| "This process has no terminal".into())
@@ -243,19 +269,27 @@ impl App {
 
     /// Enter: bring the selected session's (or terminal's) tab to the front.
     fn activate(&mut self) {
-        let tty = match self.selected_tty() {
+        let target = match self.selected_target() {
             Ok(t) => t,
             Err(e) => return self.flash(e, true),
         };
-        let apps: focus::AppByTty = self.snap.terminals.iter().map(|t| (t.tty.clone(), t.app.clone())).collect();
-        let app = apps.get(&tty).cloned().unwrap_or_default();
-        let short = tty.trim_start_matches("tty").to_string();
-        self.flash(format!("Switching to {short} in {app}…"), false);
         let tx = self.focus_tx.clone();
-        std::thread::spawn(move || {
-            let r = focus::focus(&tty, &app, &apps).map(|_| format!("Switched to {short} in {app}"));
-            let _ = tx.send(r);
-        });
+        match target {
+            Target::Tty(tty) => {
+                let apps: focus::AppByTty = self.snap.terminals.iter().map(|t| (t.tty.clone(), t.app.clone())).collect();
+                let app = apps.get(&tty).cloned().unwrap_or_default();
+                self.flash(format!("Switching to {} in {app}…", tty.trim_start_matches("tty")), false);
+                std::thread::spawn(move || {
+                    let _ = tx.send(focus::focus(&tty, &app, &apps));
+                });
+            }
+            Target::App(app) => {
+                self.flash(format!("Bringing {app} to the front…"), false);
+                std::thread::spawn(move || {
+                    let _ = tx.send(focus::activate_app(&app));
+                });
+            }
+        }
     }
 
     /// From a terminal row, show the agent session running in it.
@@ -340,7 +374,13 @@ fn print_once(snap: &Snapshot, all: bool) {
         }
     }
     for p in &snap.orphan_procs {
-        println!("● {:<6} pid {} (no transcript) {}", p.tool.label(), p.pid, home_rel(&p.cwd));
+        println!(
+            "● {:<6} pid {} (no transcript) {}  in {}",
+            p.tool.label(),
+            p.pid,
+            home_rel(&p.cwd),
+            p.host.as_deref().unwrap_or("?")
+        );
     }
     println!();
     for t in &snap.terminals {
@@ -354,6 +394,27 @@ fn print_once(snap: &Snapshot, all: bool) {
             println!("    & {} (pid {})", one_line(&j.cmdline, 60), j.pid);
         }
     }
+}
+
+/// `~/.config/whosup/theme` (or `$XDG_CONFIG_HOME/whosup/theme`): "light" or "dark".
+fn theme_file() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"));
+    base.join("whosup").join("theme")
+}
+
+fn load_theme() {
+    let light = std::fs::read_to_string(theme_file()).map(|s| s.trim() == "light").unwrap_or(false);
+    ui::set_light(light);
+}
+
+fn save_theme() -> std::io::Result<()> {
+    let f = theme_file();
+    if let Some(dir) = f.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(f, if ui::is_light() { "light\n" } else { "dark\n" })
 }
 
 fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
@@ -396,6 +457,14 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                         app.rebuild_rows();
                     }
                     KeyCode::Char('r') => app.refresh(),
+                    KeyCode::Char('t') => {
+                        ui::set_light(!ui::is_light());
+                        let name = if ui::is_light() { "Light" } else { "Dark" };
+                        match save_theme() {
+                            Ok(()) => app.flash(format!("{name} theme"), false),
+                            Err(e) => app.flash(format!("{name} theme (couldn't save it: {e})"), true),
+                        }
+                    }
                     KeyCode::Char('J') => app.detail_scroll = app.detail_scroll.saturating_add(3),
                     KeyCode::Char('K') => app.detail_scroll = app.detail_scroll.saturating_sub(3),
                     _ => {}
@@ -421,14 +490,14 @@ fn main() -> std::io::Result<()> {
             "--recent" => hours = args.next().and_then(|h| h.parse().ok()).unwrap_or(hours),
             "--once" => once = true,
             "--all" => all = true,
-            // bring a tty's tab to the front, e.g. `pitop --focus ttys003`
+            // bring a tty's tab to the front, e.g. `whosup --focus ttys003`
             "--focus" => {
                 let tty = args.next().unwrap_or_default();
                 let terms = crate::terms::scan(&sysinfo::System::new_all());
                 let apps: focus::AppByTty = terms.iter().map(|t| (t.tty.clone(), t.app.clone())).collect();
                 let app = apps.get(&tty).cloned().unwrap_or_default();
                 match focus::focus(&tty, &app, &apps) {
-                    Ok(()) => println!("focused {tty} in {app}"),
+                    Ok(m) => println!("{m}"),
                     Err(e) => {
                         eprintln!("{e}");
                         std::process::exit(1);
@@ -453,6 +522,7 @@ fn main() -> std::io::Result<()> {
         print_once(&scanner.scan(), all);
         return Ok(());
     }
+    load_theme();
     let app = App::new(scanner);
     let mut term = ratatui::init();
     let res = run(&mut term, app);
@@ -465,24 +535,25 @@ mod render_test {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
 
-    /// Render real data: `PITOP_SIZE=120x30 PITOP_VIEW=terminals PITOP_SEL=3 PITOP_RECENT=1
-    /// cargo test --release render -- --ignored --nocapture`. Also writes /tmp/pitop-<size>.html.
+    /// Render real data: `WHOSUP_SIZE=120x30 WHOSUP_VIEW=terminals WHOSUP_SEL=3 WHOSUP_RECENT=1
+    /// cargo test --release render -- --ignored --nocapture`. Also writes /tmp/whosup-<size>.html.
     #[test]
     #[ignore]
     fn render() {
         let env = |k: &str| std::env::var(k).ok();
-        let (w, h) = env("PITOP_SIZE")
+        let (w, h) = env("WHOSUP_SIZE")
             .and_then(|s| s.split_once('x').map(|(a, b)| (a.parse().unwrap(), b.parse().unwrap())))
             .unwrap_or((160u16, 40u16));
         let dir = PathBuf::from(std::env::var("HOME").unwrap()).join(".pi/agent");
+        ui::set_light(env("WHOSUP_LIGHT").is_some());
         let mut app = App::new(Scanner::new(dir, 30 * 3_600_000));
-        app.show_recent = env("PITOP_RECENT").is_some();
-        app.hide_finished = env("PITOP_HIDE").is_some();
+        app.show_recent = env("WHOSUP_RECENT").is_some();
+        app.hide_finished = env("WHOSUP_HIDE").is_some();
         app.rebuild_rows();
-        if env("PITOP_VIEW").as_deref() == Some("terminals") {
+        if env("WHOSUP_VIEW").as_deref() == Some("terminals") {
             app.set_view(View::Terminals);
         }
-        if let Some(n) = env("PITOP_SEL").and_then(|n| n.parse::<isize>().ok()) {
+        if let Some(n) = env("WHOSUP_SEL").and_then(|n| n.parse::<isize>().ok()) {
             app.move_sel(n);
         }
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -512,6 +583,6 @@ mod render_test {
             html.push('\n');
         }
         html.push_str("</pre></body></html>");
-        std::fs::write(format!("/tmp/pitop-{w}x{h}.html"), html).unwrap();
+        std::fs::write(format!("/tmp/whosup-{w}x{h}.html"), html).unwrap();
     }
 }

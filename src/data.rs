@@ -320,6 +320,18 @@ pub struct ProcInfo {
     pub cwd: String,
     pub cpu: f32,
     pub mem: u64,
+    /// The app the process runs inside (Ghostty, Visual Studio Code, Cursor, …), from its parents.
+    pub host: Option<String>,
+    /// One process serving many threads (the Codex editor extension's `codex app-server`):
+    /// never matched to a single session.
+    pub server: bool,
+}
+
+/// Name of the `.app` bundle a process path lives in: the outermost one, so a helper inside
+/// `Visual Studio Code.app/…/Code Helper.app` names Visual Studio Code.
+pub fn app_name_of(path: &str) -> Option<String> {
+    let i = path.find(".app/").or_else(|| path.ends_with(".app").then(|| path.len() - 4))?;
+    Some(path[..i].rsplit('/').next().unwrap_or("app").to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -355,6 +367,8 @@ pub struct Agent {
 #[derive(Clone, Debug)]
 pub struct Session {
     pub tool: Tool,
+    /// The app it runs in (terminal emulator, editor, or the agent's own desktop app).
+    pub host: Option<String>,
     /// live without a matched process (the Codex desktop app writes the transcript itself)
     pub app_live: bool,
     pub key: String,
@@ -490,6 +504,19 @@ impl Scanner {
                 continue;
             }
             let (pid, p) = (pid, self.sys.process(*pid).unwrap());
+            // walk up to the app hosting it (terminal emulator or editor)
+            let mut host = None;
+            let mut anc = p.parent();
+            for _ in 0..24 {
+                let Some(a) = anc.and_then(|a| self.sys.process(a)) else { break };
+                let path = a.cmd().first().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                if let Some(name) = app_name_of(&path) {
+                    host = Some(name);
+                    break;
+                }
+                anc = a.parent();
+            }
+            let server = *tool == Tool::Codex && p.cmd().iter().any(|a| a == "app-server");
             out.push(ProcInfo {
                 tool: *tool,
                 pid: pid.as_u32(),
@@ -497,6 +524,8 @@ impl Scanner {
                 cwd: p.cwd().map(|c| c.to_string_lossy().to_string()).unwrap_or_default(),
                 cpu: p.cpu_usage(),
                 mem: p.memory(),
+                host,
+                server,
             });
         }
         out.sort_by_key(|p| p.start_ms);
@@ -772,6 +801,9 @@ impl Scanner {
     pub fn scan(&mut self) -> Snapshot {
         let now = now_ms();
         let mut procs = self.agent_processes();
+        // servers (Codex's editor extension) host many threads; they are handled like the app
+        let servers: Vec<ProcInfo> = procs.iter().filter(|p| p.server).cloned().collect();
+        procs.retain(|p| !p.server);
         let codex_app = self
             .sys
             .processes()
@@ -797,6 +829,7 @@ impl Scanner {
             }
             sessions.push(Session {
                 tool,
+                host: None,
                 app_live: false,
                 key: format!("s:{}", p.display()),
                 tty: None,
@@ -848,10 +881,28 @@ impl Scanner {
 
         // Codex desktop threads have no process of their own: live while the app runs and the
         // thread was touched recently
+        // (and the same for threads served by the Codex editor extension)
         for s in sessions.iter_mut() {
-            if s.tool == Tool::Codex && s.proc.is_none() && codex_app {
+            if let Some(p) = &s.proc {
+                s.host = p.host.clone();
+                continue;
+            }
+            if s.tool != Tool::Codex {
+                continue;
+            }
+            let server = servers.iter().find(|p| p.cwd == s.t.cwd).or(servers.first());
+            let editor_thread = s.t.origin.as_deref().map(|o| o.contains("vscode")).unwrap_or(false);
+            let host = match (server, editor_thread || !codex_app) {
+                (Some(p), true) => p.host.clone().or(Some("editor".into())),
+                _ if codex_app => Some("Codex".into()),
+                _ => None,
+            };
+            if host.is_some() {
                 let window = if s.t.is_busy() { 10 * 60_000 } else { 30 * 60_000 };
                 s.app_live = now - s.mtime < window;
+                if s.app_live {
+                    s.host = host;
+                }
             }
         }
 
@@ -889,6 +940,7 @@ impl Scanner {
             t.name = Some("(background runs, no session)".into());
             sessions.push(Session {
                 tool: Tool::Pi,
+                host: None,
                 app_live: false,
                 key: "s:unattached".into(),
                 tty: None,
@@ -946,5 +998,22 @@ mod tests {
         assert_eq!(base_agent_id("scout-5-a1-abb20485"), "scout-5");
         assert_eq!(base_agent_id("worker-12-a3-0f"), "worker-12");
         assert_eq!(base_agent_id("plain"), "plain");
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::app_name_of;
+
+    #[test]
+    fn names_the_outer_app_bundle() {
+        let vscode = "/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)";
+        assert_eq!(app_name_of(vscode).as_deref(), Some("Visual Studio Code"));
+        assert_eq!(app_name_of("/Applications/Cursor.app/Contents/MacOS/Cursor").as_deref(), Some("Cursor"));
+        assert_eq!(app_name_of("/Applications/Zed.app/Contents/MacOS/zed").as_deref(), Some("Zed"));
+        assert_eq!(app_name_of("/Applications/IntelliJ IDEA.app/Contents/MacOS/idea").as_deref(), Some("IntelliJ IDEA"));
+        assert_eq!(app_name_of("/Applications/Atom.app/Contents/Frameworks/Atom Helper.app/Contents/MacOS/Atom Helper").as_deref(), Some("Atom"));
+        assert_eq!(app_name_of("/Users/u/Applications/Ghostty.app").as_deref(), Some("Ghostty"));
+        assert_eq!(app_name_of("/bin/zsh"), None);
     }
 }

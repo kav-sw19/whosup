@@ -317,3 +317,31 @@ impl Transcript {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Tool;
+
+    #[test]
+    fn detects_agents_wherever_they_run() {
+        // plain CLI, in any terminal (Ghostty, VS Code, Cursor, Zed, JetBrains, Atom)
+        assert_eq!(Tool::from_argv("claude", None, "claude"), Some(Tool::Claude));
+        assert_eq!(Tool::from_argv("/opt/homebrew/bin/codex", None, "codex"), Some(Tool::Codex));
+        assert_eq!(Tool::from_argv("pi", None, "node"), Some(Tool::Pi));
+        // launched through a runtime
+        assert_eq!(Tool::from_argv("/usr/local/bin/node", Some("/usr/local/lib/node_modules/@x/claude.js"), "node"), Some(Tool::Claude));
+        // editor extensions: Claude Code for VS Code ships its own binary; Codex runs `codex app-server`
+        assert_eq!(
+            Tool::from_argv("/Users/u/.vscode/extensions/anthropic.claude-code-2.1.0-darwin-arm64/resources/native-binary/claude", Some("--output-format"), "claude"),
+            Some(Tool::Claude)
+        );
+        assert_eq!(
+            Tool::from_argv("/Users/u/.cursor/extensions/openai.chatgpt-0.4.0-darwin-arm64/bin/macos-aarch64/codex", Some("app-server"), "codex"),
+            Some(Tool::Codex)
+        );
+        // desktop apps are not terminal sessions
+        assert_eq!(Tool::from_argv("/Applications/Claude.app/Contents/MacOS/Claude", None, "Claude"), None);
+        assert_eq!(Tool::from_argv("/Applications/Codex.app/Contents/MacOS/codex", None, "codex"), None);
+        assert_eq!(Tool::from_argv("zsh", None, "zsh"), None);
+    }
+}

@@ -117,8 +117,8 @@ fn pretty_cmd(cmd: &[OsString], fallback: &str) -> String {
 fn app_for(mut pid: u32, by_pid: &HashMap<u32, &PsRow>) -> String {
     for _ in 0..16 {
         let Some(r) = by_pid.get(&pid) else { break };
-        if let Some(i) = r.comm.find(".app/") {
-            return r.comm[..i].rsplit('/').next().unwrap_or("app").to_string();
+        if let Some(name) = crate::data::app_name_of(&r.comm) {
+            return name;
         }
         match base(&r.comm).as_str() {
             n @ ("tmux" | "screen" | "zellij") => return n.to_string(),
