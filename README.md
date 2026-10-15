@@ -166,12 +166,17 @@ terminal, so whosup opens the folder in the editor and copies the command for yo
 
 ## Needs you and notifications
 
-A live session **needs you** when it has finished its turn, or stopped with an error, and is
-waiting for your next message. These sessions sort to the top of the list, their status is bold,
+A live session **needs you** when it has finished its turn, stopped with an error, or is waiting
+for you to **approve a tool call** (shown as `approve Bash?`).
+
+Claude Code and Codex don't record approval prompts in their transcripts, so whosup infers them:
+the session's last entry is a tool request, nothing has been written for a few seconds, no
+command has started for it, and the agent is idle. (Codex approval events are used directly when
+present.) These sessions sort to the top of the list, their status is bold,
 and the header counts them.
 
 With notifications on (`n`), whosup sends a macOS notification when a session goes from working
-to waiting for you, or to an error. They appear under Script Editor, the app macOS uses for
+to waiting for you, waiting for approval, or an error. They appear under Script Editor, the app macOS uses for
 `osascript` notifications, so allow notifications for it in System Settings if none show up.
 Settings live in `~/.config/whosup/config`.
 

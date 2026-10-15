@@ -254,6 +254,7 @@ impl Transcript {
                         self.last_stop = None;
                     }
                     "task_complete" => {
+                        self.approval_requested = false;
                         self.last_role = Some("assistant".into());
                         self.last_stop = Some("stop".into());
                         if let Some(t) = s(p, "/last_agent_message") {
@@ -263,6 +264,12 @@ impl Transcript {
                     "turn_aborted" => {
                         self.last_role = Some("assistant".into());
                         self.last_stop = Some("aborted".into());
+                        self.approval_requested = false;
+                    }
+                    // exec_approval_request, apply_patch_approval_request, …
+                    t if t.ends_with("approval_request") => self.approval_requested = true,
+                    t if t.ends_with("_begin") || t.ends_with("_end") => {
+                        self.approval_requested = false;
                     }
                     "token_count" => {
                         if let Some(t) = p.pointer("/info/total_token_usage/total_tokens").and_then(Value::as_u64) {
@@ -330,6 +337,7 @@ impl Transcript {
                     }
                     "function_call_output" | "custom_tool_call_output" | "local_shell_call_output" => {
                         self.last_role = Some("toolResult".into());
+                        self.approval_requested = false;
                     }
                     _ => {}
                 }

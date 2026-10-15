@@ -133,6 +133,8 @@ pub struct Transcript {
     pub cost_estimated: bool,
     /// context window the agent reported for this session (Codex), if any
     pub context_window: Option<u64>,
+    /// the agent recorded an approval request that hasn't been answered (Codex)
+    pub approval_requested: bool,
     /// this file is itself a sub-agent transcript (keep sidechain lines)
     pub(crate) sidechain_file: bool,
 }
@@ -380,6 +382,8 @@ pub struct Agent {
 
 #[derive(Clone, Debug)]
 pub struct Session {
+    /// waiting for you to approve a tool call (see `approval_pending`)
+    pub awaiting_approval: bool,
     pub tool: Tool,
     /// The app it runs in (terminal emulator, editor, or the agent's own desktop app).
     pub host: Option<String>,
@@ -413,9 +417,10 @@ impl Session {
                 .unwrap_or_else(|| "(new session)".into())
         })
     }
-    /// Live, finished its turn (or hit an error), and waiting for your next message.
+    /// Live and waiting on you: finished its turn, hit an error, or wants a tool call approved.
     pub fn needs_you(&self) -> bool {
-        self.live()
+        self.awaiting_approval
+            || self.live()
             && !self.t.is_busy()
             && self.t.last_role.as_deref() == Some("assistant")
             && matches!(self.t.last_stop.as_deref(), Some("stop") | Some("error"))
@@ -487,6 +492,35 @@ fn mtime_ms(p: &Path) -> i64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// What whosup can see about a live Claude Code or Codex session's last tool request.
+pub struct ApprovalSignals<'a> {
+    pub last_role: Option<&'a str>,
+    pub last_stop: Option<&'a str>,
+    /// time since the transcript last changed
+    pub quiet_ms: i64,
+    /// a child process started since the request (the tool's command running)
+    pub fresh_child: bool,
+    pub cpu: f32,
+    pub agents_running: bool,
+    /// the agent recorded an approval request itself
+    pub requested_by_agent: bool,
+}
+
+/// Is the agent waiting for you to approve a tool call? The transcript ends on the request
+/// either way, so: nothing written for a few seconds, no command started for it, the agent
+/// idle and no sub-agent busy means it's sitting at the approval prompt.
+pub fn approval_pending(s: &ApprovalSignals) -> bool {
+    if s.requested_by_agent {
+        return true;
+    }
+    s.last_role == Some("assistant")
+        && s.last_stop == Some("toolUse")
+        && s.quiet_ms >= 4_000
+        && !s.fresh_child
+        && s.cpu < 3.0
+        && !s.agents_running
 }
 
 /// `scout-5-a1-abb20485` -> `scout-5`
@@ -905,6 +939,7 @@ impl Scanner {
             }
             crate::cost::fill(&mut t);
             sessions.push(Session {
+                awaiting_approval: false,
                 tool,
                 host: None,
                 app_live: false,
@@ -1057,6 +1092,7 @@ impl Scanner {
             let mut t = Transcript::default();
             t.name = Some("(background runs, no session)".into());
             sessions.push(Session {
+                awaiting_approval: false,
                 tool: Tool::Pi,
                 host: None,
                 app_live: false,
@@ -1067,6 +1103,27 @@ impl Scanner {
                 mtime: now,
                 proc: None,
                 agents: unattached,
+            });
+        }
+
+        // waiting for a tool call to be approved?
+        for s in sessions.iter_mut() {
+            let Some(pr) = &s.proc else { continue };
+            if !matches!(s.tool, Tool::Claude | Tool::Codex) {
+                continue;
+            }
+            let requested = s.t.last_ts.unwrap_or(s.mtime);
+            let fresh_child = self.sys.processes().values().any(|c| {
+                c.parent().map(|pp| pp.as_u32()) == Some(pr.pid) && c.start_time() as i64 * 1000 >= requested - 1_000
+            });
+            s.awaiting_approval = approval_pending(&ApprovalSignals {
+                last_role: s.t.last_role.as_deref(),
+                last_stop: s.t.last_stop.as_deref(),
+                quiet_ms: now - requested.max(s.mtime),
+                fresh_child,
+                cpu: pr.cpu,
+                agents_running: s.running_agents() > 0,
+                requested_by_agent: s.t.approval_requested,
             });
         }
 
@@ -1134,5 +1191,42 @@ mod host_tests {
         assert_eq!(app_name_of("/Applications/Atom.app/Contents/Frameworks/Atom Helper.app/Contents/MacOS/Atom Helper").as_deref(), Some("Atom"));
         assert_eq!(app_name_of("/Users/u/Applications/Ghostty.app").as_deref(), Some("Ghostty"));
         assert_eq!(app_name_of("/bin/zsh"), None);
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::{approval_pending, ApprovalSignals};
+
+    fn base() -> ApprovalSignals<'static> {
+        ApprovalSignals {
+            last_role: Some("assistant"),
+            last_stop: Some("toolUse"),
+            quiet_ms: 6_000,
+            fresh_child: false,
+            cpu: 0.4,
+            agents_running: false,
+            requested_by_agent: false,
+        }
+    }
+
+    #[test]
+    fn sitting_at_an_approval_prompt() {
+        assert!(approval_pending(&base()));
+    }
+
+    #[test]
+    fn not_when_the_tool_is_running_or_just_asked() {
+        assert!(!approval_pending(&ApprovalSignals { fresh_child: true, ..base() }), "its command is running");
+        assert!(!approval_pending(&ApprovalSignals { quiet_ms: 1_500, ..base() }), "only just asked");
+        assert!(!approval_pending(&ApprovalSignals { cpu: 25.0, ..base() }), "agent busy in-process");
+        assert!(!approval_pending(&ApprovalSignals { agents_running: true, ..base() }), "a sub-agent is working");
+        assert!(!approval_pending(&ApprovalSignals { last_role: Some("toolResult"), ..base() }), "tool already answered");
+        assert!(!approval_pending(&ApprovalSignals { last_stop: Some("stop"), ..base() }), "finished its turn");
+    }
+
+    #[test]
+    fn codex_says_so_itself() {
+        assert!(approval_pending(&ApprovalSignals { requested_by_agent: true, last_stop: None, quiet_ms: 0, ..base() }));
     }
 }

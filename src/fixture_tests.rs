@@ -146,3 +146,74 @@ fn context_use() {
     assert_eq!(claude.t.context_tokens, 10 + 17000 + 40);
     assert!(claude.context_used().is_some());
 }
+
+/// End to end with a stand-in `claude` process (a sleeper built at /tmp/whosup-fake/bin/claude;
+/// see the commit that added this). `cargo test --release live_approval -- --ignored`
+#[test]
+#[ignore]
+fn live_approval() {
+    use std::process::Command;
+    let base = std::env::temp_dir().join(format!("whosup-approval-{}", std::process::id()));
+    let project = base.join("project");
+    let projects = base.join("claude/projects/p");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&projects).unwrap();
+    let cwd = project.canonicalize().unwrap().display().to_string();
+    let transcript = |at: &str| {
+        format!(
+            "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\"content\":\"run the tests\"}},\"timestamp\":\"{at}\",\"cwd\":\"{cwd}\",\"sessionId\":\"live-1\"}}\n\
+             {{\"type\":\"assistant\",\"message\":{{\"model\":\"claude-opus-4-8\",\"id\":\"m1\",\"role\":\"assistant\",\"content\":[{{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{{\"command\":\"npm test\"}}}}],\"stop_reason\":\"tool_use\"}},\"timestamp\":\"{at}\",\"cwd\":\"{cwd}\",\"sessionId\":\"live-1\"}}\n"
+        )
+    };
+    let iso = |ms: i64| {
+        let secs = ms / 1000;
+        let out = Command::new("date").args(["-u", "-r", &secs.to_string(), "+%Y-%m-%dT%H:%M:%S.000Z"]).output().unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let scan = || {
+        let mut s = Scanner::new(base.join("pi"), i64::MAX / 4);
+        s.claude_dir = base.join("claude");
+        s.codex_dir = base.join("codex");
+        s.scan()
+    };
+
+    // 1. the agent asked to run Bash and nothing has happened since
+    let mut agent = Command::new("/tmp/whosup-fake/bin/claude").arg("30").current_dir(&project).spawn().unwrap();
+    std::fs::write(projects.join("live-1.jsonl"), transcript(&iso(crate::data::now_ms()))).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let snap = scan();
+    let s = snap.sessions.iter().find(|s| s.t.id == "live-1").expect("found");
+    assert!(s.live(), "matched to the running claude");
+    assert!(s.awaiting_approval, "sitting at the approval prompt");
+    assert!(s.needs_you());
+    agent.kill().ok();
+
+    // 2. same request, but the agent starts a command for it: running, not waiting
+    let mut agent = Command::new("/tmp/whosup-fake/bin/claude").args(["30", "child"]).current_dir(&project).spawn().unwrap();
+    std::fs::write(projects.join("live-1.jsonl"), transcript(&iso(crate::data::now_ms()))).unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let snap = scan();
+    let s = snap.sessions.iter().find(|s| s.t.id == "live-1").expect("found");
+    assert!(s.live());
+    assert!(!s.awaiting_approval, "its command is running");
+    agent.kill().ok();
+    Command::new("pkill").args(["-f", "/bin/sleep 20"]).status().ok();
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn codex_approval_events() {
+    let dir = std::env::temp_dir().join(format!("whosup-codex-approval-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("rollout.jsonl");
+    let head = r#"{"timestamp":"2026-10-15T11:00:00.000Z","type":"session_meta","payload":{"id":"c1","cwd":"/x"}}
+{"timestamp":"2026-10-15T11:00:01.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"c1"}}
+{"timestamp":"2026-10-15T11:00:01.100Z","type":"event_msg","payload":{"type":"exec_approval_request","call_id":"c1"}}
+"#;
+    std::fs::write(&f, head).unwrap();
+    let mut cache = TranscriptCache::default();
+    assert!(cache.get(&f, Tool::Codex, false).unwrap().approval_requested);
+    std::fs::write(&f, format!("{head}{}\n", r#"{"timestamp":"2026-10-15T11:00:05.000Z","type":"event_msg","payload":{"type":"exec_command_begin","call_id":"c1"}}"#)).unwrap();
+    assert!(!cache.get(&f, Tool::Codex, false).unwrap().approval_requested, "answered");
+    std::fs::remove_dir_all(&dir).ok();
+}

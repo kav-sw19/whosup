@@ -70,6 +70,7 @@ enum Phase {
     Busy,
     NeedsYou,
     Error,
+    Approval,
     Other,
 }
 
@@ -249,7 +250,9 @@ impl App {
     /// Notify (when enabled) as a live session finishes its turn or hits an error.
     fn notify_changes(&mut self) {
         let phase = |s: &Session| {
-            if s.t.is_busy() {
+            if s.awaiting_approval {
+                Phase::Approval
+            } else if s.t.is_busy() {
                 Phase::Busy
             } else if s.needs_you() && s.t.last_stop.as_deref() == Some("error") {
                 Phase::Error
@@ -270,6 +273,11 @@ impl App {
                 let place = s.tty.as_deref().map(|t| format!(" · {}", t.trim_start_matches("tty"))).unwrap_or_default();
                 let subtitle = format!("{}{place}", s.tool.label());
                 match is {
+                    Phase::Approval => notify(
+                        &format!("Approve {}?", s.t.last_tool.as_deref().unwrap_or("a tool call")),
+                        &subtitle,
+                        &s.title(),
+                    ),
                     Phase::NeedsYou => notify("Waiting for you", &subtitle, &s.title()),
                     Phase::Error => notify("Stopped with an error", &subtitle, &s.title()),
                     _ => {}

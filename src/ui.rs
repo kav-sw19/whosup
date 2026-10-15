@@ -249,6 +249,10 @@ fn session_status(s: &Session) -> Status {
     if !s.live() {
         return Status { glyph: "○".into(), label: "closed".into(), color: pal().faint };
     }
+    if s.awaiting_approval {
+        let tool = s.t.last_tool.clone().unwrap_or_else(|| "tool".into());
+        return Status { glyph: "◆".into(), label: format!("approve {tool}?"), color: pal().orange };
+    }
     if s.t.is_busy() {
         let label = match (s.t.last_role.as_deref(), s.t.last_stop.as_deref()) {
             (Some("assistant"), Some("toolUse")) => s.t.last_tool.clone().unwrap_or_else(|| "tool".into()),
