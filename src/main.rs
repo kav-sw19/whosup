@@ -38,7 +38,7 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
 
 KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details
-      a history: live only → recent → 7 days → all
+      a history: live only → recent → 7 days → all · p group by project
       f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
@@ -50,6 +50,24 @@ pub enum RowRef {
     Job(usize, usize),
     /// Non-selectable separator between live and recently closed sessions.
     Divider,
+    /// Non-selectable project header when grouping (index into `App::groups`).
+    Group(usize),
+}
+
+impl RowRef {
+    /// Headers and dividers can't be selected.
+    pub fn is_header(&self) -> bool {
+        matches!(self, RowRef::Divider | RowRef::Group(_))
+    }
+}
+
+/// A project heading in grouped view.
+pub struct GroupInfo {
+    pub path: String,
+    pub live: usize,
+    pub total: usize,
+    pub cost: f64,
+    pub estimated: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -114,6 +132,11 @@ pub struct App {
     base_window_ms: i64,
     /// refresh right after the next draw (so a slow load shows its message first)
     refresh_soon: bool,
+    /// group sessions by project (`p`)
+    pub group: bool,
+    pub groups: Vec<GroupInfo>,
+    /// folder -> project root (the enclosing git repository), cached
+    projects: std::collections::HashMap<String, String>,
     /// search text (`/`); every word must match
     pub query: String,
     /// typing into the search box
@@ -237,12 +260,34 @@ impl App {
             demo,
             history: History::Live,
             base_window_ms,
+            group: false,
+            groups: vec![],
+            projects: std::collections::HashMap::new(),
             refresh_soon: false,
             query: String::new(),
             searching: false,
         };
         ui::set_light(a.settings.light);
         a
+    }
+
+    /// The git repository a folder belongs to (its folder), else the folder itself.
+    fn project_of(&mut self, cwd: &str) -> String {
+        if let Some(p) = self.projects.get(cwd) {
+            return p.clone();
+        }
+        let mut dir = std::path::Path::new(cwd);
+        let root = loop {
+            if dir.join(".git").exists() {
+                break dir.display().to_string();
+            }
+            match dir.parent() {
+                Some(p) if p.as_os_str().len() > 1 => dir = p,
+                _ => break cwd.to_string(),
+            }
+        };
+        self.projects.insert(cwd.to_string(), root.clone());
+        root
     }
 
     /// The window the configured "recent" covers, for labels.
@@ -284,10 +329,50 @@ impl App {
             return self.finish_rows(rows);
         }
         let mut divided = false;
-        let visible: Vec<usize> = self.visible_sessions().map(|(i, _)| i).collect();
+        let mut visible: Vec<usize> = self.visible_sessions().map(|(i, _)| i).collect();
+        // grouped: projects ordered by their most recent activity, sessions in the usual order
+        let mut group_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        self.groups.clear();
+        if self.group {
+            let roots: Vec<String> = visible.iter().map(|&i| self.project_of(&self.snap.sessions[i].t.cwd.clone())).collect();
+            let mut order: Vec<String> = Vec::new();
+            let mut latest: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+            for (&i, root) in visible.iter().zip(&roots) {
+                let s = &self.snap.sessions[i];
+                let at = if s.live() { i64::MAX } else { s.t.last_ts.unwrap_or(s.mtime) };
+                let e = latest.entry(root.clone()).or_insert(at);
+                *e = (*e).max(at);
+                if !order.contains(root) {
+                    order.push(root.clone());
+                }
+            }
+            order.sort_by_key(|r| std::cmp::Reverse(latest[r]));
+            for root in &order {
+                let members: Vec<usize> = visible.iter().zip(&roots).filter(|(_, r)| *r == root).map(|(&i, _)| i).collect();
+                let ss: Vec<&Session> = members.iter().map(|&i| &self.snap.sessions[i]).collect();
+                self.groups.push(GroupInfo {
+                    path: root.clone(),
+                    live: ss.iter().filter(|s| s.live()).count(),
+                    total: ss.len(),
+                    cost: ss.iter().map(|s| s.t.cost).sum::<f64>() + 0.0,
+                    estimated: ss.iter().any(|s| s.t.cost_estimated),
+                });
+                for i in members {
+                    group_of.insert(i, self.groups.len() - 1);
+                }
+            }
+            visible.sort_by_key(|i| group_of[i]);
+        }
+        let mut current_group = None;
         for i in visible {
             let s = &self.snap.sessions[i];
-            if !divided && !Self::open_by_default(s) {
+            if self.group {
+                let g = group_of[&i];
+                if current_group != Some(g) {
+                    rows.push((format!("group:{}", self.groups[g].path), RowRef::Group(g)));
+                    current_group = Some(g);
+                }
+            } else if !divided && !Self::open_by_default(s) {
                 if !rows.is_empty() {
                     rows.push(("div:recent".to_string(), RowRef::Divider));
                 }
@@ -327,8 +412,11 @@ impl App {
             .as_ref()
             .and_then(|k| self.rows.iter().position(|(rk, _)| rk == k))
             .unwrap_or_else(|| self.state.selected().unwrap_or(0).min(self.rows.len().saturating_sub(1)));
-        if matches!(self.rows.get(idx), Some((_, RowRef::Divider))) {
+        while matches!(self.rows.get(idx), Some((_, r)) if r.is_header()) {
             idx += 1;
+        }
+        if idx >= self.rows.len() {
+            idx = self.rows.iter().position(|(_, r)| !r.is_header()).unwrap_or(0);
         }
         self.state.select(if self.rows.is_empty() { None } else { Some(idx) });
         self.selected_key = self.state.selected().map(|i| self.rows[i].0.clone());
@@ -421,9 +509,15 @@ impl App {
         let last = self.rows.len() as isize - 1;
         let mut n = (cur + d).clamp(0, last);
         // never rest on the divider: keep going the same way, or back off at the ends
-        if matches!(self.rows[n as usize].1, RowRef::Divider) {
-            let step = if d >= 0 { 1 } else { -1 };
-            n = if (0..=last).contains(&(n + step)) { n + step } else { n - step };
+        let step = if d >= 0 { 1 } else { -1 };
+        while self.rows[n as usize].1.is_header() {
+            if (0..=last).contains(&(n + step)) {
+                n += step;
+            } else {
+                // nothing selectable that way: back the other way from where we were
+                n = cur;
+                break;
+            }
         }
         let n = n as usize;
         if self.state.selected() != Some(n) {
@@ -731,6 +825,10 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     KeyCode::Char('1') => app.set_view(View::Sessions),
                     KeyCode::Char('2') => app.set_view(View::Terminals),
                     KeyCode::Char('a') => app.cycle_history(),
+                    KeyCode::Char('p') if app.view == View::Sessions => {
+                        app.group = !app.group;
+                        app.rebuild_rows();
+                    }
                     KeyCode::Char('f') => {
                         app.hide_finished = !app.hide_finished;
                         app.rebuild_rows();
@@ -892,6 +990,10 @@ mod render_test {
         app.rebuild_rows();
         if env("WHOSUP_VIEW").as_deref() == Some("terminals") {
             app.set_view(View::Terminals);
+        }
+        if env("WHOSUP_GROUP").is_some() {
+            app.group = true;
+            app.rebuild_rows();
         }
         if let Some(q) = env("WHOSUP_QUERY") {
             app.query = q;
@@ -1187,5 +1289,52 @@ mod history_tests {
         assert_eq!(scan(1), 0);
         assert_eq!(scan(i64::MAX / 4), 4);
         std::fs::remove_dir_all(&fixtures).ok();
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    #[test]
+    fn groups_by_project_and_skips_headers() {
+        let mut app = App::new_demo(Scanner::new(PathBuf::from("/nonexistent"), 24 * 3_600_000));
+        app.cycle_history(); // include closed sessions
+        app.group = true;
+        app.rebuild_rows();
+        let paths: Vec<&str> = app.groups.iter().map(|g| g.path.as_str()).collect();
+        assert_eq!(paths.len(), 3, "{paths:?}");
+        let api = app.groups.iter().find(|g| g.path.ends_with("code/api")).unwrap();
+        assert_eq!((api.live, api.total), (1, 2), "rate limiting (live) + release notes (closed)");
+        // the selection never rests on a header
+        assert!(!app.rows[app.state.selected().unwrap()].1.is_header());
+        for _ in 0..30 {
+            app.move_sel(1);
+            assert!(!app.rows[app.state.selected().unwrap()].1.is_header());
+        }
+        for _ in 0..30 {
+            app.move_sel(-1);
+            assert!(!app.rows[app.state.selected().unwrap()].1.is_header());
+        }
+        // every session sits under its own project's header
+        let mut current = None;
+        for (_, r) in &app.rows {
+            match r {
+                RowRef::Group(g) => current = Some(app.groups[*g].path.clone()),
+                RowRef::Session(i) => assert_eq!(current.as_deref(), Some(app.snap.sessions[*i].t.cwd.as_str())),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn a_subfolder_belongs_to_its_repository() {
+        let root = std::env::temp_dir().join(format!("whosup-proj-{}", std::process::id()));
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("crates/core")).unwrap();
+        let mut app = App::new_demo(Scanner::new(PathBuf::from("/nonexistent"), 0));
+        assert_eq!(app.project_of(&root.join("crates/core").display().to_string()), root.display().to_string());
+        assert_eq!(app.project_of("/no/such/folder"), "/no/such/folder");
+        std::fs::remove_dir_all(&root).ok();
     }
 }

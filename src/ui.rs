@@ -617,6 +617,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("J K", "scroll", None, 7),
             ("a", history_label.as_str(), Some(app.show_recent), 3),
             ("f", "hide finished", Some(app.hide_finished), 4),
+            ("p", "by project", Some(app.group), 5),
             ("n", "notify", Some(app.settings.notify), 4),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),
@@ -765,6 +766,28 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                         Style::new().fg(pal().muted),
                     ),
                     right(cost_str(a.cost, a.source == AgentSource::ClaudeTask), Style::new().fg(pal().muted)),
+                ]));
+            }
+            RowRef::Group(g) => {
+                let g = &app.groups[*g];
+                let p = pal();
+                let mut spans = vec![
+                    Span::styled("  ▍", Style::new().fg(p.blue)),
+                    Span::styled(home_rel(&g.path), Style::new().fg(p.fg).bold()),
+                    Span::styled(format!("   {} live · {} session{}", g.live, g.total, if g.total == 1 { "" } else { "s" }), Style::new().fg(p.muted)),
+                ];
+                if g.cost > 0.0 {
+                    spans.push(Span::styled(format!(" · {}", cost_str(g.cost, g.estimated)), Style::new().fg(p.muted)));
+                }
+                rows.push(fit(vec![
+                    Cell::from(""),
+                    Cell::from(Line::from(spans)),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
                 ]));
             }
             RowRef::Divider => {
@@ -1056,7 +1079,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     // paths are shortened to one line (inner width minus borders and padding)
     let path_w = area.width.saturating_sub(6).max(10) as usize;
     let goto = match app.selected() {
-        Some(RowRef::Divider) | None => None,
+        Some(RowRef::Divider) | Some(RowRef::Group(_)) | None => None,
         _ => Some(goto_line(app)),
     };
     let mut lines: Vec<Line> = Vec::new();
@@ -1240,7 +1263,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::default());
             lines.push(Line::from(Span::styled(home_rel(&p.cwd), Style::new().fg(pal().faint))));
         }
-        Some(RowRef::Divider) | None => {
+        Some(RowRef::Divider) | Some(RowRef::Group(_)) | None => {
             title = title_line("Details", None);
         }
     }

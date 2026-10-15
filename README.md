@@ -113,6 +113,7 @@ whosup --resume "auth"      # resume the closed session whose title matches "aut
 | `J` `K` | Scroll the details pane |
 | `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
 | `f` | Hide finished sub-agents |
+| `p` | Group sessions by project (their git repository, else their folder) |
 | `n` | Turn notifications on or off (remembered) |
 | `t` | Switch between the dark and light theme (remembered) |
 | `r` | Refresh now |
