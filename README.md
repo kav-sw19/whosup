@@ -111,7 +111,7 @@ whosup --resume "auth"      # resume the closed session whose title matches "aut
 | `↵` | Live session or terminal: bring its tab to the front. Closed session: resume it |
 | `s` | On a terminal: show the agent session running in it |
 | `J` `K` | Scroll the details pane |
-| `a` | Show recently closed sessions as well as live ones |
+| `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
 | `f` | Hide finished sub-agents |
 | `n` | Turn notifications on or off (remembered) |
 | `t` | Switch between the dark and light theme (remembered) |

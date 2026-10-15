@@ -600,6 +600,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         );
         return;
     }
+    let history_label = if app.show_recent { app.history.label(app.scanner_window()) } else { "history".to_string() };
     // Enter resumes a closed session and jumps to a live one
     let enter_label = match app.selected_target() {
         Ok(crate::Target::Resume(_)) => "resume",
@@ -614,7 +615,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("↑↓", "move", None, 2),
             ("←→", "fold", None, 6),
             ("J K", "scroll", None, 7),
-            ("a", "recent", Some(app.show_recent), 3),
+            ("a", history_label.as_str(), Some(app.show_recent), 3),
             ("f", "hide finished", Some(app.hide_finished), 4),
             ("n", "notify", Some(app.settings.notify), 4),
             ("t", "theme", None, 5),
@@ -817,7 +818,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         .filter(|s| !app.settings.hides(s.tool.label()) && (s.live() || s.running_agents() > 0))
         .count();
     let recent = app.visible_sessions().count() - live.min(app.visible_sessions().count());
-    let count_text = if app.show_recent { format!("{live} live · {recent} recent") } else { format!("{live} live") };
+    let count_text = if app.show_recent {
+        format!("{live} live · {recent} closed in {}", app.history.label(app.scanner_window()).replace("all history", "all time"))
+    } else {
+        format!("{live} live")
+    };
     let count_text = if app.query.is_empty() { count_text } else { format!("{count_text} · “{}” (esc clears)", app.query) };
     let count = Span::styled(count_text, Style::new().fg(if app.query.is_empty() { pal().muted } else { pal().violet }));
 

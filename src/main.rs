@@ -37,7 +37,8 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
   --demo     show made-up sessions and terminals (for trying whosup out, or screenshots)
 
 KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
-      ←/→ h/l fold · s (terminals) show its session · J/K scroll details · a all-recent/live-only
+      ←/→ h/l fold · s (terminals) show its session · J/K scroll details
+      a history: live only → recent → 7 days → all
       f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
@@ -107,10 +108,47 @@ pub struct App {
     phases: Option<std::collections::HashMap<String, Phase>>,
     /// show made-up data (`--demo`) instead of scanning
     demo: bool,
+    /// how far back closed sessions go (`a` cycles)
+    pub history: History,
+    /// the configured recent window, in ms (config `recent_hours` or `--recent`)
+    base_window_ms: i64,
+    /// refresh right after the next draw (so a slow load shows its message first)
+    refresh_soon: bool,
     /// search text (`/`); every word must match
     pub query: String,
     /// typing into the search box
     pub searching: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum History {
+    Live,
+    Recent,
+    Week,
+    All,
+}
+
+impl History {
+    fn next(self) -> Self {
+        match self {
+            History::Live => History::Recent,
+            History::Recent => History::Week,
+            History::Week => History::All,
+            History::All => History::Live,
+        }
+    }
+
+    pub fn label(self, base_ms: i64) -> String {
+        match self {
+            History::Live => "live only".into(),
+            History::Recent => {
+                let h = base_ms as f64 / 3_600_000.0;
+                if h >= 48.0 && h % 24.0 == 0.0 { format!("{} days", h / 24.0) } else { format!("{h}h") }
+            }
+            History::Week => "7 days".into(),
+            History::All => "all history".into(),
+        }
+    }
 }
 
 /// Does every word of the query appear in what we know about the session?
@@ -158,7 +196,24 @@ impl App {
         a
     }
 
+    /// `a`: live → recent → 7 days → all history → live.
+    pub fn cycle_history(&mut self) {
+        self.history = self.history.next();
+        self.show_recent = self.history != History::Live;
+        self.scanner.recent_window_ms = match self.history {
+            History::Live | History::Recent => self.base_window_ms,
+            History::Week => self.base_window_ms.max(7 * 24 * 3_600_000),
+            History::All => i64::MAX / 4,
+        };
+        if self.history == History::All {
+            self.flash("Loading all history…", false);
+        }
+        self.refresh_soon = true;
+        self.rebuild_rows();
+    }
+
     fn new_inner(scanner: Scanner, demo: bool) -> Self {
+        let base_window_ms = scanner.recent_window_ms;
         let (focus_tx, focus_rx) = mpsc::channel();
         let a = Self {
             view: View::Sessions,
@@ -180,11 +235,19 @@ impl App {
             hosts: settings::Hosts::load(),
             phases: None,
             demo,
+            history: History::Live,
+            base_window_ms,
+            refresh_soon: false,
             query: String::new(),
             searching: false,
         };
         ui::set_light(a.settings.light);
         a
+    }
+
+    /// The window the configured "recent" covers, for labels.
+    pub fn scanner_window(&self) -> i64 {
+        self.base_window_ms
     }
 
     pub fn query_words(&self) -> Vec<String> {
@@ -607,6 +670,16 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
     loop {
         app.poll_focus();
         term.draw(|f| ui::draw(f, &mut app))?;
+        if app.refresh_soon {
+            app.refresh_soon = false;
+            app.refresh();
+            if app.history == History::All {
+                let n = app.snap.sessions.len();
+                app.flash(format!("All history: {n} sessions"), false);
+            }
+            last = Instant::now();
+            continue;
+        }
         if event::poll(frame)? {
             if let Event::Key(k) = event::read()? {
                 if k.kind != KeyEventKind::Press {
@@ -657,10 +730,7 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     }
                     KeyCode::Char('1') => app.set_view(View::Sessions),
                     KeyCode::Char('2') => app.set_view(View::Terminals),
-                    KeyCode::Char('a') => {
-                        app.show_recent = !app.show_recent;
-                        app.rebuild_rows();
-                    }
+                    KeyCode::Char('a') => app.cycle_history(),
                     KeyCode::Char('f') => {
                         app.hide_finished = !app.hide_finished;
                         app.rebuild_rows();
@@ -814,7 +884,10 @@ mod render_test {
         } else {
             App::new(Scanner::new(dir, 30 * 3_600_000))
         };
-        app.show_recent = env("WHOSUP_RECENT").is_some();
+        if env("WHOSUP_RECENT").is_some() {
+            app.cycle_history();
+            app.refresh();
+        }
         app.hide_finished = env("WHOSUP_HIDE").is_some();
         app.rebuild_rows();
         if env("WHOSUP_VIEW").as_deref() == Some("terminals") {
@@ -990,7 +1063,7 @@ mod screenshots {
         app.settings.light = light;
         ui::set_light(light);
         app.settings.notify = true;
-        app.show_recent = true;
+        app.cycle_history();
         app.rebuild_rows();
         if view == View::Terminals {
             app.set_view(View::Terminals);
@@ -1068,5 +1141,51 @@ mod search_tests {
         app.query = "visual".into();
         app.rebuild_rows();
         assert_eq!(app.rows.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn a_cycles_through_history() {
+        let mut app = App::new_demo(Scanner::new(PathBuf::from("/nonexistent"), 24 * 3_600_000));
+        assert_eq!(app.history, History::Live);
+        app.cycle_history();
+        assert_eq!((app.history, app.scanner.recent_window_ms), (History::Recent, 24 * 3_600_000));
+        assert_eq!(app.history.label(app.scanner_window()), "24h");
+        app.cycle_history();
+        assert_eq!((app.history, app.scanner.recent_window_ms), (History::Week, 7 * 24 * 3_600_000));
+        app.cycle_history();
+        assert_eq!(app.history, History::All);
+        assert!(app.scanner.recent_window_ms > 100 * 365 * 24 * 3_600_000);
+        app.cycle_history();
+        assert_eq!(app.history, History::Live);
+        assert!(!app.show_recent);
+        assert_eq!(History::Recent.label(72 * 3_600_000), "3 days");
+    }
+
+    #[test]
+    fn the_window_decides_which_closed_sessions_load() {
+        // a copy dated 2020, so no running agent counts as having touched it
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let fixtures = std::env::temp_dir().join(format!("whosup-history-{}", std::process::id()));
+        std::process::Command::new("cp").args(["-R"]).arg(&src).arg(&fixtures).status().unwrap();
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("find {} -type f -exec touch -t 202001010000 {{}} +", fixtures.display()))
+            .status()
+            .unwrap();
+        let scan = |window: i64| {
+            let mut s = Scanner::new(fixtures.join("pi"), window);
+            s.claude_dir = fixtures.join("claude");
+            s.codex_dir = fixtures.join("codex");
+            s.scan().sessions.len()
+        };
+        // the fixture files are older than a second, so a 1 ms window loads none of them
+        assert_eq!(scan(1), 0);
+        assert_eq!(scan(i64::MAX / 4), 4);
+        std::fs::remove_dir_all(&fixtures).ok();
     }
 }
