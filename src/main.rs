@@ -1,6 +1,7 @@
 mod cost;
 mod convo;
 mod data;
+mod export;
 mod models;
 #[cfg(test)]
 mod fixture_tests;
@@ -40,6 +41,7 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
 KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details
       a history: live only → recent → 7 days → all · p group by project · v read the conversation
+      y copy (r resume command, i id, f file, d folder, l last reply) · e export to Markdown
       f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
 #[derive(Clone)]
@@ -162,6 +164,8 @@ pub struct App {
     pub groups: Vec<GroupInfo>,
     /// folder -> project root (the enclosing git repository), cached
     projects: std::collections::HashMap<String, String>,
+    /// waiting for the second key of `y` (copy what?)
+    pub copying: bool,
     /// search text (`/`); every word must match
     pub query: String,
     /// typing into the search box
@@ -292,9 +296,60 @@ impl App {
             refresh_soon: false,
             query: String::new(),
             searching: false,
+            copying: false,
         };
         ui::set_light(a.settings.light);
         a
+    }
+
+    /// The session the selection belongs to (a sub-agent row counts as its session).
+    fn selected_session(&self) -> Option<&Session> {
+        match self.selected() {
+            Some(RowRef::Session(i)) | Some(RowRef::Agent(i, _)) => self.snap.sessions.get(*i),
+            _ => None,
+        }
+    }
+
+    /// `y` then a key: copy part of the selected session.
+    fn copy_part(&mut self, key: char) {
+        let Some(s) = self.selected_session() else { return self.flash("Select a session first", true) };
+        let (what, text) = match key {
+            'r' => match resume::plan(s, self.hosts.get(&s.key).map(String::as_str)) {
+                Ok(p) => ("resume command", format!("cd {} && {}", shell_quote(&p.cwd), p.command)),
+                Err(e) => return self.flash(e, true),
+            },
+            'i' => ("session id", s.t.id.clone()),
+            'f' => ("transcript path", s.path.display().to_string()),
+            'd' => ("folder", s.t.cwd.clone()),
+            'l' => match &s.t.last_text {
+                Some(t) => ("last reply", t.clone()),
+                None => return self.flash("No reply to copy yet", true),
+            },
+            _ => return self.flash("Nothing copied", false),
+        };
+        if text.is_empty() {
+            return self.flash(format!("No {what} for this session"), true);
+        }
+        match export::copy(&text) {
+            Ok(()) => self.flash(format!("Copied the {what}"), false),
+            Err(e) => self.flash(format!("Couldn't copy: {e}"), true),
+        }
+    }
+
+    /// `e`: write the selected session's conversation to ~/Downloads as Markdown.
+    fn export_session(&mut self) {
+        let Some(s) = self.selected_session() else { return self.flash("Select a session first", true) };
+        if s.path.as_os_str().is_empty() {
+            return self.flash("No transcript for this session", true);
+        }
+        let items = convo::load(&s.path, s.tool, false);
+        let md = export::markdown(s, &items, export::local_time);
+        let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Downloads");
+        let file = dir.join(export::file_name(&s.title(), data::now_ms()));
+        match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, md)) {
+            Ok(()) => self.flash(format!("Exported to {}", ui::home_rel(&file.display().to_string())), false),
+            Err(e) => self.flash(format!("Couldn't export: {e}"), true),
+        }
     }
 
     /// `v`: open the selected session's (or sub-agent's) whole conversation.
@@ -802,6 +857,10 @@ fn print_once(snap: &Snapshot, all: bool) {
     }
 }
 
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 /// A macOS notification (in the background, so the UI never waits on it).
 fn notify(title: &str, subtitle: &str, body: &str) {
     let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
@@ -853,6 +912,14 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     }
                     continue;
                 }
+                // the key after `y`: what to copy
+                if app.copying {
+                    app.copying = false;
+                    if let KeyCode::Char(c) = k.code {
+                        app.copy_part(c);
+                    }
+                    continue;
+                }
                 // typing into the search box
                 if app.searching {
                     match k.code {
@@ -900,6 +967,8 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     KeyCode::Char('2') => app.set_view(View::Terminals),
                     KeyCode::Char('a') => app.cycle_history(),
                     KeyCode::Char('v') if app.view == View::Sessions => app.open_convo(),
+                    KeyCode::Char('y') if app.view == View::Sessions => app.copying = true,
+                    KeyCode::Char('e') if app.view == View::Sessions => app.export_session(),
                     KeyCode::Char('p') if app.view == View::Sessions => {
                         app.group = !app.group;
                         app.rebuild_rows();
@@ -1069,6 +1138,11 @@ mod render_test {
         if env("WHOSUP_GROUP").is_some() {
             app.group = true;
             app.rebuild_rows();
+        }
+        if env("WHOSUP_EXPORT").is_some() {
+            app.export_session();
+            app.copy_part('r');
+            println!("flash: {}", app.flash.as_ref().map(|f| f.text.clone()).unwrap_or_default());
         }
         if env("WHOSUP_CONVO").is_some() {
             app.open_convo();

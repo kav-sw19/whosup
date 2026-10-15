@@ -112,6 +112,8 @@ whosup --resume "auth"      # resume the closed session whose title matches "aut
 | `s` | On a terminal: show the agent session running in it |
 | `J` `K` | Scroll the details pane |
 | `v` | Read the whole conversation of the selected session or sub-agent (`v` / `esc` closes) |
+| `y` then `r` `i` `f` `d` `l` | Copy the resume command, session id, transcript path, folder or last reply |
+| `e` | Export the conversation to Markdown in `~/Downloads` |
 | `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
 | `f` | Hide finished sub-agents |
 | `p` | Group sessions by project (their git repository, else their folder) |

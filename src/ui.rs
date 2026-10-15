@@ -640,6 +640,22 @@ fn draw_convo(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if app.copying {
+        let p = pal();
+        let mut spans = vec![Span::styled(" copy ", Style::new().fg(p.on_accent).bg(p.blue).bold()), Span::raw("  ")];
+        for (i, (k, v)) in [("r", "resume command"), ("i", "session id"), ("f", "transcript"), ("d", "folder"), ("l", "last reply")]
+            .iter()
+            .enumerate()
+        {
+            if i > 0 {
+                spans.push(Span::styled("  ·  ", Style::new().fg(p.faint)));
+            }
+            spans.push(Span::styled(*k, Style::new().fg(p.soft).bold()));
+            spans.push(Span::styled(format!(" {v}"), Style::new().fg(p.muted)));
+        }
+        f.render_widget(Line::from(spans), area);
+        return;
+    }
     if app.convo.is_some() {
         let p = pal();
         let keys = [("↑↓", "scroll"), ("PgUp PgDn", "page"), ("g G", "top / latest"), ("v esc", "close")];
@@ -705,6 +721,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("f", "hide finished", Some(app.hide_finished), 4),
             ("p", "by project", Some(app.group), 5),
             ("v", "conversation", None, 4),
+            ("y", "copy", None, 6),
+            ("e", "export", None, 7),
             ("n", "notify", Some(app.settings.notify), 4),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),

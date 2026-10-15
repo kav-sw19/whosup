@@ -347,3 +347,17 @@ fn conversations() {
         ]
     );
 }
+
+#[test]
+fn export_markdown() {
+    let snap = scan_fixtures();
+    let s = snap.sessions.iter().find(|s| s.title() == "Add rate limiting").unwrap();
+    let items = crate::convo::load(&s.path, s.tool, false);
+    let md = crate::export::markdown(s, &items, |ms| crate::export::format_time(ms, 0));
+    assert!(md.starts_with("# Add rate limiting\n"), "{md}");
+    assert!(md.contains("**Agent:** pi"));
+    assert!(md.contains("**Folder:** `/Users/you/code/api`"));
+    assert!(md.contains("## You · 2026-10-15 09:00\n\nadd rate limits to /v1\n"), "{md}");
+    assert!(md.contains("- ⚙ **edit** `src/router.rs`"));
+    assert!(md.contains("## pi · 2026-10-15 09:00\n\nRate limiting is in place on /v1.\n"), "{md}");
+}
