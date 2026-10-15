@@ -568,6 +568,25 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    // the search box takes the footer while you type
+    if app.searching {
+        let p = pal();
+        let matches = app.rows.iter().filter(|(_, r)| matches!(r, RowRef::Session(_) | RowRef::Terminal(_))).count();
+        f.render_widget(
+            Line::from(vec![
+                Span::styled(" / ", Style::new().fg(p.on_accent).bg(p.blue).bold()),
+                Span::styled(format!(" {}", app.query), Style::new().fg(p.fg).bold()),
+                Span::styled("▏", Style::new().fg(p.blue)),
+                Span::styled(format!("   {matches} match{}", if matches == 1 { "" } else { "es" }), Style::new().fg(p.muted)),
+                Span::styled("   ↵", Style::new().fg(p.soft).bold()),
+                Span::styled(" keep", Style::new().fg(p.muted)),
+                Span::styled("   esc", Style::new().fg(p.soft).bold()),
+                Span::styled(" clear", Style::new().fg(p.muted)),
+            ]),
+            area,
+        );
+        return;
+    }
     // a recent action's result replaces the hints for a few seconds
     if let Some(fl) = app.flash.as_ref().filter(|fl| fl.at.elapsed().as_secs() < 4) {
         let (glyph, color) = if fl.error { ("✗", pal().red) } else if fl.text.ends_with('…') { (spinner(), pal().cyan) } else { ("✓", pal().green) };
@@ -590,6 +609,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let keys: Vec<(&str, &str, Option<bool>, u8)> = match app.view {
         View::Sessions => vec![
             ("↵", enter_label, None, 0),
+            ("/", "search", None, 2),
             ("tab", "terminals", None, 1),
             ("↑↓", "move", None, 2),
             ("←→", "fold", None, 6),
@@ -602,6 +622,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         ],
         View::Terminals => vec![
             ("↵", "go to tab", None, 0),
+            ("/", "search", None, 2),
             ("tab", "sessions", None, 1),
             ("↑↓", "move", None, 2),
             ("s", "show session", None, 3),
@@ -797,7 +818,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         .count();
     let recent = app.visible_sessions().count() - live.min(app.visible_sessions().count());
     let count_text = if app.show_recent { format!("{live} live · {recent} recent") } else { format!("{live} live") };
-    let count = Span::styled(count_text, Style::new().fg(pal().muted));
+    let count_text = if app.query.is_empty() { count_text } else { format!("{count_text} · “{}” (esc clears)", app.query) };
+    let count = Span::styled(count_text, Style::new().fg(if app.query.is_empty() { pal().muted } else { pal().violet }));
 
     let widths: Vec<Constraint> = [
         Constraint::Length(1),
@@ -987,7 +1009,7 @@ fn runs_in(s: &Session, last_host: Option<&String>) -> String {
     }
 }
 
-fn short_app(name: &str) -> String {
+pub fn short_app(name: &str) -> String {
     match name {
         "Visual Studio Code" => "VS Code".into(),
         "Visual Studio Code - Insiders" => "VS Code β".into(),

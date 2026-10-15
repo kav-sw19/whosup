@@ -104,6 +104,7 @@ whosup --resume "auth"      # resume the closed session whose title matches "aut
 
 | Key | Action |
 | --- | --- |
+| `/` | Search: every word must match the title, folder, agent, model, first prompt or a sub-agent's task (`↵` keeps it, `esc` clears it) |
 | `tab` · `1` · `2` | Switch between Sessions and Terminals |
 | `↑` `↓` · `j` `k` | Move the selection (`PgUp` / `PgDn`, `g` / `G` jump) |
 | `←` `→` · `h` `l` | Collapse or expand a session's sub-agents (closed sessions start collapsed) |
@@ -115,7 +116,7 @@ whosup --resume "auth"      # resume the closed session whose title matches "aut
 | `n` | Turn notifications on or off (remembered) |
 | `t` | Switch between the dark and light theme (remembered) |
 | `r` | Refresh now |
-| `q` · `Esc` | Quit |
+| `q` · `Esc` | Quit (`Esc` clears a search first) |
 
 ### Reading the status column
 

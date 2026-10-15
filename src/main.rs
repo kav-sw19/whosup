@@ -36,7 +36,7 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
   --once     print a plain-text snapshot and exit (--all: include closed recent sessions)
   --demo     show made-up sessions and terminals (for trying whosup out, or screenshots)
 
-KEYS: tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
+KEYS: / search · tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details · a all-recent/live-only
       f hide finished agents · t light/dark theme · g/G top/bottom · r refresh · q quit";
 
@@ -107,6 +107,48 @@ pub struct App {
     phases: Option<std::collections::HashMap<String, Phase>>,
     /// show made-up data (`--demo`) instead of scanning
     demo: bool,
+    /// search text (`/`); every word must match
+    pub query: String,
+    /// typing into the search box
+    pub searching: bool,
+}
+
+/// Does every word of the query appear in what we know about the session?
+pub fn session_matches(s: &Session, words: &[String]) -> bool {
+    if words.is_empty() {
+        return true;
+    }
+    let mut hay = vec![
+        s.title(),
+        s.t.cwd.clone(),
+        s.tool.label().to_string(),
+        s.t.model.clone().unwrap_or_default(),
+        s.t.first_user.clone().unwrap_or_default(),
+        s.tty.clone().unwrap_or_default(),
+        s.host.clone().unwrap_or_default(),
+        // what the list shows (VS Code, s001)
+        s.host.as_deref().map(ui::short_app).unwrap_or_default(),
+        s.tty.as_deref().map(|t| t.trim_start_matches("tty").to_string()).unwrap_or_default(),
+    ];
+    for a in &s.agents {
+        hay.push(format!("{} {} {}", a.id, a.agent, a.task));
+    }
+    let hay = hay.join("\n").to_lowercase();
+    words.iter().all(|w| hay.contains(w.as_str()))
+}
+
+pub fn terminal_matches(t: &terms::Terminal, words: &[String]) -> bool {
+    if words.is_empty() {
+        return true;
+    }
+    let mut hay = vec![t.tty.clone(), t.short_tty(), t.app.clone(), ui::short_app(&t.app), t.cwd()];
+    hay.extend(t.foreground.iter().map(|p| p.cmdline.clone()));
+    hay.extend(t.jobs.iter().map(|p| p.cmdline.clone()));
+    if let Some(l) = &t.session {
+        hay.push(format!("{} {}", l.tool.label(), l.title));
+    }
+    let hay = hay.join("\n").to_lowercase();
+    words.iter().all(|w| hay.contains(w.as_str()))
 }
 
 impl App {
@@ -138,13 +180,21 @@ impl App {
             hosts: settings::Hosts::load(),
             phases: None,
             demo,
+            query: String::new(),
+            searching: false,
         };
         ui::set_light(a.settings.light);
         a
     }
 
+    pub fn query_words(&self) -> Vec<String> {
+        self.query.to_lowercase().split_whitespace().map(String::from).collect()
+    }
+
     fn visible_sessions(&self) -> impl Iterator<Item = (usize, &Session)> {
-        let show_recent = self.show_recent;
+        let words = self.query_words();
+        // a search looks through closed sessions too
+        let show_recent = self.show_recent || !words.is_empty();
         let settings = &self.settings;
         self.snap
             .sessions
@@ -152,12 +202,17 @@ impl App {
             .enumerate()
             .filter(move |(_, s)| !settings.hides(s.tool.label()))
             .filter(move |(_, s)| show_recent || s.live() || s.running_agents() > 0)
+            .filter(move |(_, s)| session_matches(s, &words))
     }
 
     fn rebuild_rows(&mut self) {
         let mut rows = Vec::new();
         if self.view == View::Terminals {
+            let words = self.query_words();
             for (i, t) in self.snap.terminals.iter().enumerate() {
+                if !terminal_matches(t, &words) {
+                    continue;
+                }
                 rows.push((t.key.clone(), RowRef::Terminal(i)));
                 for (j, job) in t.jobs.iter().enumerate() {
                     rows.push((format!("{}:job:{}", t.key, job.pid), RowRef::Job(i, j)));
@@ -557,7 +612,33 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                 if k.kind != KeyEventKind::Press {
                     continue;
                 }
+                // typing into the search box
+                if app.searching {
+                    match k.code {
+                        KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                        KeyCode::Char(c) => app.query.push(c),
+                        KeyCode::Backspace => {
+                            app.query.pop();
+                        }
+                        KeyCode::Enter | KeyCode::Down | KeyCode::Up => app.searching = false,
+                        KeyCode::Esc => {
+                            app.searching = false;
+                            app.query.clear();
+                        }
+                        _ => {}
+                    }
+                    app.rebuild_rows();
+                    continue;
+                }
                 match k.code {
+                    KeyCode::Char('/') => {
+                        app.searching = true;
+                    }
+                    // Esc clears a search first, then quits
+                    KeyCode::Esc if !app.query.is_empty() => {
+                        app.query.clear();
+                        app.rebuild_rows();
+                    }
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     KeyCode::Down | KeyCode::Char('j') => app.move_sel(1),
@@ -728,12 +809,21 @@ mod render_test {
         let dir = PathBuf::from(std::env::var("HOME").unwrap()).join(".pi/agent");
         ui::set_light(env("WHOSUP_LIGHT").is_some());
         models::load(&dir);
-        let mut app = App::new(Scanner::new(dir, 30 * 3_600_000));
+        let mut app = if env("WHOSUP_DEMO").is_some() {
+            App::new_demo(Scanner::new(dir.clone(), 0))
+        } else {
+            App::new(Scanner::new(dir, 30 * 3_600_000))
+        };
         app.show_recent = env("WHOSUP_RECENT").is_some();
         app.hide_finished = env("WHOSUP_HIDE").is_some();
         app.rebuild_rows();
         if env("WHOSUP_VIEW").as_deref() == Some("terminals") {
             app.set_view(View::Terminals);
+        }
+        if let Some(q) = env("WHOSUP_QUERY") {
+            app.query = q;
+            app.searching = true;
+            app.rebuild_rows();
         }
         if let Some(n) = env("WHOSUP_SEL").and_then(|n| n.parse::<isize>().ok()) {
             app.move_sel(n);
@@ -921,5 +1011,62 @@ mod screenshots {
         shot(false, View::Sessions, 1, 150, 27, "whosup-dark.svg");
         shot(true, View::Sessions, 7, 150, 27, "whosup-light.svg");
         shot(false, View::Terminals, 1, 150, 22, "whosup-terminals.svg");
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    fn demo_app() -> App {
+        App::new_demo(Scanner::new(PathBuf::from("/nonexistent"), 0))
+    }
+
+    fn titles(app: &App) -> Vec<String> {
+        app.rows
+            .iter()
+            .filter_map(|(_, r)| match r {
+                RowRef::Session(i) => Some(app.snap.sessions[*i].title()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn filters_by_any_field() {
+        let mut app = demo_app();
+        // a sub-agent's task
+        app.query = "redis".into();
+        app.rebuild_rows();
+        assert_eq!(titles(&app), vec!["Add rate limiting to the public API"]);
+        // agent name
+        app.query = "codex".into();
+        app.rebuild_rows();
+        assert_eq!(titles(&app), vec!["Fix flaky checkout test"]);
+        // every word must match; closed sessions are searched too
+        app.query = "pi dashboard".into();
+        app.rebuild_rows();
+        assert_eq!(titles(&app), vec!["Profile the slow dashboard query"]);
+        app.query = "nothing like this".into();
+        app.rebuild_rows();
+        assert!(titles(&app).is_empty());
+        app.query.clear();
+        app.rebuild_rows();
+        assert_eq!(titles(&app).len(), 3, "live ones only when not searching");
+    }
+
+    #[test]
+    fn filters_terminals() {
+        let mut app = demo_app();
+        app.set_view(View::Terminals);
+        app.query = "cargo".into();
+        app.rebuild_rows();
+        assert_eq!(app.rows.len(), 1);
+        app.query = "vs code".into();
+        app.rebuild_rows();
+        assert_eq!(app.rows.len(), 1, "the name the list shows");
+        app.query = "visual".into();
+        app.rebuild_rows();
+        assert_eq!(app.rows.len(), 1);
     }
 }
