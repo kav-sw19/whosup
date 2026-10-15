@@ -1,4 +1,6 @@
 mod data;
+#[cfg(test)]
+mod fixture_tests;
 mod demo;
 mod resume;
 mod settings;

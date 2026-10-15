@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"scout-1-a1-abcdef12","timestamp":"2026-10-15T09:00:10.000Z","cwd":"/Users/you/code/api"}
+{"type":"message","id":"u1","parentId":null,"timestamp":"2026-10-15T09:00:10.100Z","message":{"role":"user","content":[{"type":"text","text":"Find every route"}]}}
+{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-10-15T09:00:40.000Z","message":{"role":"assistant","content":[{"type":"text","text":"6 routes."}],"model":"claude-haiku-5-5","usage":{"input":1,"output":10,"cacheRead":0,"cacheWrite":0,"totalTokens":11,"cost":{"total":0.004}},"stopReason":"stop"}}
