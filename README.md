@@ -89,7 +89,12 @@ brew install kav-sw19/tap/whosup
 
 **Prebuilt binary:** download `whosup-<version>-macos-universal.tar.gz` from
 [Releases](https://github.com/kav-sw19/whosup/releases) (Apple Silicon and Intel), unpack it and put
-`whosup` on your PATH.
+`whosup` on your PATH. The binary isn't signed with an Apple Developer ID, so macOS blocks a copy
+downloaded in a browser; clear the download flag once before running it:
+
+```sh
+xattr -d com.apple.quarantine whosup
+```
 
 **From source** (Rust 1.85 or newer):
 
@@ -292,9 +297,7 @@ permission.
 
 ## Platform support
 
-Built and tested on **macOS**. The process and terminal scanning uses `ps` and
-[`sysinfo`](https://crates.io/crates/sysinfo), so Linux should mostly work, but it hasn't been
-tested there. Windows is not supported.
+whosup runs on **macOS** (Apple Silicon and Intel).
 
 ## Limitations
 
