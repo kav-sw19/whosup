@@ -133,3 +133,16 @@ fn cost_estimates() {
     assert!(!pi.t.cost_estimated);
     assert!((pi.t.cost - 0.08).abs() < 1e-9);
 }
+
+#[test]
+fn context_use() {
+    let snap = scan_fixtures();
+    let codex = snap.sessions.iter().find(|s| s.title() == "Fix flaky checkout test").unwrap();
+    // Codex reports its own window: 30800 of 258400
+    assert_eq!(codex.t.context_window, Some(258_400));
+    assert!((codex.context_used().unwrap() - 30800.0 / 258400.0).abs() < 1e-9);
+    // Claude Code: last message's input + cache + output, against the model's window
+    let claude = snap.sessions.iter().find(|s| s.title() == "Fix login redirect").unwrap();
+    assert_eq!(claude.t.context_tokens, 10 + 17000 + 40);
+    assert!(claude.context_used().is_some());
+}

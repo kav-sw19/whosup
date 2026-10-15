@@ -169,6 +169,22 @@ pub fn tokens(n: u64) -> String {
     }
 }
 
+/// `context ━━━━━━──────────── 31% of 1M`: green, amber from 60%, red from 85%.
+fn context_gauge(used: f64, window_tokens: Option<u64>) -> Line<'static> {
+    let p = pal();
+    let width = 24usize;
+    let filled = ((used.min(1.0) * width as f64).round() as usize).min(width);
+    let color = if used >= 0.85 { p.red } else if used >= 0.6 { p.amber } else { p.green };
+    let of = window_tokens.map(|w| format!(" of {}", tokens(w))).unwrap_or_default();
+    Line::from(vec![
+        Span::styled("context ", Style::new().fg(p.muted)),
+        Span::styled("━".repeat(filled), Style::new().fg(color)),
+        Span::styled("─".repeat(width - filled), Style::new().fg(p.faint)),
+        Span::styled(format!(" {:.0}%", used * 100.0), Style::new().fg(p.fg).bold()),
+        Span::styled(of, Style::new().fg(p.muted)),
+    ])
+}
+
 /// Cost, marked `≈` when it was estimated from tokens rather than recorded by the agent.
 pub fn cost_str(c: f64, estimated: bool) -> String {
     let m = money(c);
@@ -658,6 +674,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     tool_tag(s.tool, live),
                     Span::styled(one_line(&s.title(), 80), title_style),
                 ];
+                // a live session close to its context limit gets a tag
+                if let Some(used) = s.context_used().filter(|u| live && *u >= 0.8) {
+                    let c = if used >= 0.95 { pal().red } else { pal().amber };
+                    title.push(Span::styled(format!("  ctx {:.0}%", used * 100.0), Style::new().fg(c).bold()));
+                }
                 if !s.agents.is_empty() {
                     let running = s.running_agents();
                     let (txt, c) = if running > 0 {
@@ -1038,6 +1059,10 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 ("tokens", tokens(s.t.tokens)),
                 ("context", tokens(s.t.context_tokens)),
             ]));
+            if let Some(used) = s.context_used() {
+                let window = s.t.context_window.or_else(|| crate::models::window(s.t.model.as_deref().unwrap_or("")));
+                lines.push(context_gauge(used, window));
+            }
             let est = s.t.cost_estimated;
             if s.agents.is_empty() {
                 lines.push(stats(&[("spent", cost_str(s.t.cost, est))]));

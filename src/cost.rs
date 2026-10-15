@@ -1,6 +1,7 @@
 //! Cost estimates for agents that record tokens but not cost (Claude Code, Codex), priced per
-//! million tokens. `price.<model>=…` lines in the config override the built-in table; both
-//! match a fragment of the model name, first match wins.
+//! million tokens. Prices come from, in order: `price.<model>=…` lines in the config (matched
+//! against a fragment of the model name), pi's model list (models-store.json), then a built-in
+//! table by model family.
 
 use crate::data::Transcript;
 use crate::settings::Price;
@@ -33,6 +34,7 @@ pub fn price_for(model: &str) -> Option<Price> {
         .flatten()
         .find(|(k, _)| m.contains(k.as_str()))
         .map(|(_, p)| p.clone())
+        .or_else(|| crate::models::lookup(model).and_then(|i| i.price))
         .or_else(|| DEFAULTS.iter().find(|(k, _)| m.contains(k)).map(|(_, p)| p.clone()))
 }
 

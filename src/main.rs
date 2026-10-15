@@ -1,5 +1,6 @@
 mod cost;
 mod data;
+mod models;
 #[cfg(test)]
 mod fixture_tests;
 mod demo;
@@ -679,6 +680,7 @@ fn main() -> std::io::Result<()> {
         }
     }
     let dir = dir.unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".pi/agent"));
+    models::load(&dir);
     let mut scanner = Scanner::new(dir, (hours * 3_600_000.0) as i64);
 
     if once {
@@ -708,6 +710,7 @@ mod render_test {
             .unwrap_or((160u16, 40u16));
         let dir = PathBuf::from(std::env::var("HOME").unwrap()).join(".pi/agent");
         ui::set_light(env("WHOSUP_LIGHT").is_some());
+        models::load(&dir);
         let mut app = App::new(Scanner::new(dir, 30 * 3_600_000));
         app.show_recent = env("WHOSUP_RECENT").is_some();
         app.hide_finished = env("WHOSUP_HIDE").is_some();

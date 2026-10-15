@@ -131,6 +131,8 @@ pub struct Transcript {
     pub cache_write_tokens: u64,
     /// `cost` was estimated from tokens, not recorded by the agent
     pub cost_estimated: bool,
+    /// context window the agent reported for this session (Codex), if any
+    pub context_window: Option<u64>,
     /// this file is itself a sub-agent transcript (keep sidechain lines)
     pub(crate) sidechain_file: bool,
 }
@@ -417,6 +419,12 @@ impl Session {
             && !self.t.is_busy()
             && self.t.last_role.as_deref() == Some("assistant")
             && matches!(self.t.last_stop.as_deref(), Some("stop") | Some("error"))
+    }
+
+    /// Share of the context window in use (0.0–1.0+), when the window is known.
+    pub fn context_used(&self) -> Option<f64> {
+        let window = self.t.context_window.or_else(|| crate::models::window(self.t.model.as_deref()?))?;
+        (window > 0 && self.t.context_tokens > 0).then(|| self.t.context_tokens as f64 / window as f64)
     }
 
     pub fn running_agents(&self) -> usize {

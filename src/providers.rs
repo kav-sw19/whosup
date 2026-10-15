@@ -247,6 +247,9 @@ impl Transcript {
                 }
                 match s(p, "/type").unwrap_or("") {
                     "task_started" => {
+                        if let Some(w) = p.get("model_context_window").and_then(Value::as_u64) {
+                            self.context_window = Some(w);
+                        }
                         self.last_role = Some("user".into());
                         self.last_stop = None;
                     }
@@ -274,6 +277,9 @@ impl Transcript {
                         }
                         if let Some(t) = p.pointer("/info/last_token_usage/total_tokens").and_then(Value::as_u64) {
                             self.context_tokens = t;
+                        }
+                        if let Some(w) = p.pointer("/info/model_context_window").and_then(Value::as_u64) {
+                            self.context_window = Some(w);
                         }
                     }
                     "thread_name_updated" | "thread_renamed" => {
