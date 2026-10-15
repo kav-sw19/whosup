@@ -1,4 +1,6 @@
 mod data;
+mod resume;
+mod settings;
 mod focus;
 mod providers;
 mod terms;
@@ -21,6 +23,7 @@ use std::{
 const HELP: &str = "whosup — live view of coding-agent sessions (pi, Claude Code, Codex, …), their sub-agents and open terminals
 
 USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focus <tty>]
+              [--resume <text>]
 
   --dir      pi agent dir (default: $PI_CODING_AGENT_DIR or ~/.pi/agent); Claude Code and Codex
              use $CLAUDE_CONFIG_DIR (~/.claude) and $CODEX_HOME (~/.codex)
@@ -51,6 +54,17 @@ pub enum View {
 pub enum Target {
     Tty(String),
     App(String),
+    /// a closed session: run its resume command
+    Resume(resume::Plan),
+}
+
+/// What a live session was doing at the last refresh, for notifications.
+#[derive(Clone, Copy, PartialEq)]
+enum Phase {
+    Busy,
+    NeedsYou,
+    Error,
+    Other,
 }
 
 /// A short message shown in place of the key hints.
@@ -79,6 +93,10 @@ pub struct App {
     state: TableState,
     selected_key: Option<String>,
     detail_scroll: u16,
+    pub settings: settings::Settings,
+    pub hosts: settings::Hosts,
+    /// each live session's phase at the last refresh (None until the first refresh)
+    phases: Option<std::collections::HashMap<String, Phase>>,
 }
 
 impl App {
@@ -100,7 +118,11 @@ impl App {
             state: TableState::default(),
             selected_key: None,
             detail_scroll: 0,
+            settings: settings::Settings::load(),
+            hosts: settings::Hosts::load(),
+            phases: None,
         };
+        ui::set_light(a.settings.light);
         a.refresh();
         a
     }
@@ -176,7 +198,56 @@ impl App {
 
     fn refresh(&mut self) {
         self.snap = self.scanner.scan();
+        self.remember_hosts();
+        self.notify_changes();
         self.rebuild_rows();
+    }
+
+    /// Remember the app each live session runs in, so it can be resumed there once closed.
+    fn remember_hosts(&mut self) {
+        for s in self.snap.sessions.iter().filter(|s| s.live() && !s.path.as_os_str().is_empty()) {
+            let app = match &s.tty {
+                Some(tty) => self.snap.terminals.iter().find(|t| &t.tty == tty).map(|t| t.app.clone()),
+                None => s.host.clone(),
+            };
+            if let Some(app) = app.filter(|a| !matches!(a.as_str(), "" | "editor" | "terminal" | "ssh" | "screen" | "zellij")) {
+                self.hosts.record(&s.key, &app);
+            }
+        }
+        self.hosts.flush();
+    }
+
+    /// Notify (when enabled) as a live session finishes its turn or hits an error.
+    fn notify_changes(&mut self) {
+        let phase = |s: &Session| {
+            if s.t.is_busy() {
+                Phase::Busy
+            } else if s.needs_you() && s.t.last_stop.as_deref() == Some("error") {
+                Phase::Error
+            } else if s.needs_you() {
+                Phase::NeedsYou
+            } else {
+                Phase::Other
+            }
+        };
+        let now: std::collections::HashMap<String, Phase> =
+            self.snap.sessions.iter().filter(|s| s.live()).map(|s| (s.key.clone(), phase(s))).collect();
+        if let (Some(before), true) = (&self.phases, self.settings.notify) {
+            for s in self.snap.sessions.iter().filter(|s| s.live()) {
+                let (was, is) = (before.get(&s.key).copied(), now[&s.key]);
+                if was != Some(Phase::Busy) {
+                    continue;
+                }
+                let place = s.tty.as_deref().map(|t| format!(" · {}", t.trim_start_matches("tty"))).unwrap_or_default();
+                let subtitle = format!("{}{place}", s.tool.label());
+                match is {
+                    Phase::NeedsYou => notify("Waiting for you", &subtitle, &s.title()),
+                    Phase::Error => notify("Stopped with an error", &subtitle, &s.title()),
+                    _ => {}
+                }
+            }
+        }
+        self.phases = Some(now);
     }
 
     fn move_sel(&mut self, d: isize) {
@@ -221,6 +292,13 @@ impl App {
 
     /// Where Enter should take you: a terminal tab, or (no tty) the app the session runs in.
     fn selected_target(&self) -> Result<Target, String> {
+        // a closed session (or a sub-agent of one): resume it
+        if let Some(RowRef::Session(i)) | Some(RowRef::Agent(i, _)) = self.selected() {
+            let s = &self.snap.sessions[*i];
+            if !s.live() && !s.path.as_os_str().is_empty() {
+                return resume::plan(s, self.hosts.get(&s.key).map(String::as_str)).map(Target::Resume);
+            }
+        }
         match self.selected_tty() {
             Ok(tty) => Ok(Target::Tty(tty)),
             Err(e) => {
@@ -287,6 +365,18 @@ impl App {
                 self.flash(format!("Bringing {app} to the front…"), false);
                 std::thread::spawn(move || {
                     let _ = tx.send(focus::activate_app(&app));
+                });
+            }
+            Target::Resume(plan) => {
+                if let Some(RowRef::Session(i)) | Some(RowRef::Agent(i, _)) = self.selected() {
+                    let s = &self.snap.sessions[*i];
+                    if matches!(plan.place, resume::Place::Terminal(_)) {
+                        data::expect_resume(&s.key, s.tool, &s.t.cwd);
+                    }
+                }
+                self.flash(format!("Resuming in {}…", plan.place.describe()), false);
+                std::thread::spawn(move || {
+                    let _ = tx.send(resume::launch(&plan));
                 });
             }
         }
@@ -396,25 +486,18 @@ fn print_once(snap: &Snapshot, all: bool) {
     }
 }
 
-/// `~/.config/whosup/theme` (or `$XDG_CONFIG_HOME/whosup/theme`): "light" or "dark".
-fn theme_file() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config"));
-    base.join("whosup").join("theme")
-}
-
-fn load_theme() {
-    let light = std::fs::read_to_string(theme_file()).map(|s| s.trim() == "light").unwrap_or(false);
-    ui::set_light(light);
-}
-
-fn save_theme() -> std::io::Result<()> {
-    let f = theme_file();
-    if let Some(dir) = f.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(f, if ui::is_light() { "light\n" } else { "dark\n" })
+/// A macOS notification (in the background, so the UI never waits on it).
+fn notify(title: &str, subtitle: &str, body: &str) {
+    let q = |s: &str| format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""));
+    let script = format!(
+        "display notification {} with title {} subtitle {} sound name \"Glass\"",
+        q(body),
+        q(&format!("whosup · {title}")),
+        q(subtitle)
+    );
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("osascript").arg("-e").arg(script).output();
+    });
 }
 
 fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
@@ -458,11 +541,27 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
                     }
                     KeyCode::Char('r') => app.refresh(),
                     KeyCode::Char('t') => {
-                        ui::set_light(!ui::is_light());
-                        let name = if ui::is_light() { "Light" } else { "Dark" };
-                        match save_theme() {
-                            Ok(()) => app.flash(format!("{name} theme"), false),
-                            Err(e) => app.flash(format!("{name} theme (couldn't save it: {e})"), true),
+                        app.settings.light = !app.settings.light;
+                        ui::set_light(app.settings.light);
+                        let name = if app.settings.light { "Light theme" } else { "Dark theme" };
+                        match app.settings.save() {
+                            Ok(()) => app.flash(name, false),
+                            Err(e) => app.flash(format!("{name} (couldn't save it: {e})"), true),
+                        }
+                    }
+                    KeyCode::Char('n') => {
+                        app.settings.notify = !app.settings.notify;
+                        let msg = if app.settings.notify {
+                            "Notifications on: you'll hear when a session finishes or errors"
+                        } else {
+                            "Notifications off"
+                        };
+                        if app.settings.notify {
+                            notify("Notifications on", "whosup", "This is what they look like");
+                        }
+                        match app.settings.save() {
+                            Ok(()) => app.flash(msg, false),
+                            Err(e) => app.flash(format!("{msg} (couldn't save it: {e})"), true),
                         }
                     }
                     KeyCode::Char('J') => app.detail_scroll = app.detail_scroll.saturating_add(3),
@@ -490,6 +589,35 @@ fn main() -> std::io::Result<()> {
             "--recent" => hours = args.next().and_then(|h| h.parse().ok()).unwrap_or(hours),
             "--once" => once = true,
             "--all" => all = true,
+            // resume the first closed session whose title or transcript path contains the text
+            "--resume" => {
+                let query = args.next().unwrap_or_default().to_lowercase();
+                let dir = dir.clone().unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".pi/agent"));
+                let mut scanner = Scanner::new(dir, (hours * 3_600_000.0) as i64);
+                let snap = scanner.scan();
+                let hosts = settings::Hosts::load();
+                let Some(s) = snap.sessions.iter().find(|s| {
+                    !s.live() && (s.title().to_lowercase().contains(&query) || s.key.to_lowercase().contains(&query))
+                }) else {
+                    eprintln!("no closed session matches {query:?} (closed in the last {hours} hours)");
+                    std::process::exit(1);
+                };
+                let result = resume::plan(s, hosts.get(&s.key).map(String::as_str)).and_then(|p| {
+                    println!("{} → {} ({}): {}", s.title(), p.place.describe(), p.because, p.command);
+                    if matches!(p.place, resume::Place::Terminal(_)) {
+                        data::expect_resume(&s.key, s.tool, &s.t.cwd);
+                    }
+                    resume::launch(&p)
+                });
+                match result {
+                    Ok(m) => println!("{m}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
             // bring a tty's tab to the front, e.g. `whosup --focus ttys003`
             "--focus" => {
                 let tty = args.next().unwrap_or_default();
@@ -522,7 +650,6 @@ fn main() -> std::io::Result<()> {
         print_once(&scanner.scan(), all);
         return Ok(());
     }
-    load_theme();
     let app = App::new(scanner);
     let mut term = ratatui::init();
     let res = run(&mut term, app);

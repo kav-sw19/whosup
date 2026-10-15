@@ -104,6 +104,9 @@ impl Transcript {
                 self.cwd = c.into();
             }
         }
+        if let Some(e) = s(v, "/entrypoint") {
+            self.entrypoint = Some(e.into());
+        }
         if v.get("isSidechain").and_then(Value::as_bool) == Some(true) && !self.sidechain_file {
             return; // older Claude Code wrote sub-agent turns into the parent file
         }
@@ -219,6 +222,7 @@ impl Transcript {
                 self.cwd = s(p, "/cwd").unwrap_or("").into();
                 self.started = s(p, "/timestamp").and_then(parse_ts).or(ts);
                 self.origin = s(p, "/originator").map(Into::into);
+                self.entrypoint = s(p, "/source").map(Into::into);
             }
             "turn_context" => {
                 if let Some(m) = s(p, "/model") {

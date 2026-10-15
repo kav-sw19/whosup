@@ -120,6 +120,9 @@ pub struct Transcript {
     pub auto_title: Option<String>,
     /// Codex `originator` (cli, desktop app, …)
     pub origin: Option<String>,
+    /// Where the transcript says it was started: Claude Code's `entrypoint` (`cli`,
+    /// `claude-vscode`, …), Codex's `source` (`cli`, `vscode`, …).
+    pub entrypoint: Option<String>,
     pub(crate) last_msg_id: Option<String>,
     /// this file is itself a sub-agent transcript (keep sidechain lines)
     pub(crate) sidechain_file: bool,
@@ -325,6 +328,8 @@ pub struct ProcInfo {
     /// One process serving many threads (the Codex editor extension's `codex app-server`):
     /// never matched to a single session.
     pub server: bool,
+    /// The session id named on its command line (`claude --resume <id>`, `codex resume <id>`).
+    pub resume_id: Option<String>,
 }
 
 /// Name of the `.app` bundle a process path lives in: the outermost one, so a helper inside
@@ -399,6 +404,14 @@ impl Session {
                 .unwrap_or_else(|| "(new session)".into())
         })
     }
+    /// Live, finished its turn (or hit an error), and waiting for your next message.
+    pub fn needs_you(&self) -> bool {
+        self.live()
+            && !self.t.is_busy()
+            && self.t.last_role.as_deref() == Some("assistant")
+            && matches!(self.t.last_stop.as_deref(), Some("stop") | Some("error"))
+    }
+
     pub fn running_agents(&self) -> usize {
         self.agents.iter().filter(|a| a.running).count()
     }
@@ -421,6 +434,35 @@ pub struct Scanner {
     /// Codex thread titles from `session_index.jsonl` (id -> name), reloaded when it changes
     codex_titles: HashMap<String, String>,
     codex_index_mtime: i64,
+    /// pid -> session key for processes already tied to a session, kept while the pid lives
+    pinned: HashMap<u32, String>,
+}
+
+/// A resume whosup just launched: the next process of that agent in that folder is that session.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct PendingResume {
+    key: String,
+    tool: String,
+    cwd: String,
+    at: i64,
+}
+
+fn pending_file() -> PathBuf {
+    crate::settings::dir().join("pending.json")
+}
+
+/// Note a resume so the process it starts is matched to the right session (it may not write
+/// anything until you send a message, and pi hides its arguments).
+pub fn expect_resume(key: &str, tool: Tool, cwd: &str) {
+    let mut list: Vec<PendingResume> =
+        fs::read_to_string(pending_file()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let now = now_ms();
+    list.retain(|p| now - p.at < 120_000 && p.key != key);
+    list.push(PendingResume { key: key.to_string(), tool: tool.label().to_string(), cwd: cwd.to_string(), at: now });
+    let _ = fs::create_dir_all(crate::settings::dir());
+    if let Ok(json) = serde_json::to_string(&list) {
+        let _ = fs::write(pending_file(), json);
+    }
 }
 
 fn mtime_ms(p: &Path) -> i64 {
@@ -460,6 +502,7 @@ impl Scanner {
             sys: System::new(),
             codex_titles: HashMap::new(),
             codex_index_mtime: 0,
+            pinned: HashMap::new(),
         }
     }
 
@@ -517,7 +560,14 @@ impl Scanner {
                 anc = a.parent();
             }
             let server = *tool == Tool::Codex && p.cmd().iter().any(|a| a == "app-server");
+            let args: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().to_string()).collect();
+            let resume_id = args
+                .windows(2)
+                .find(|w| matches!(w[0].as_str(), "--resume" | "-r" | "resume" | "--session"))
+                .map(|w| w[1].clone())
+                .filter(|v| !v.starts_with('-'));
             out.push(ProcInfo {
+                resume_id,
                 tool: *tool,
                 pid: pid.as_u32(),
                 start_ms: p.start_time() as i64 * 1000,
@@ -813,10 +863,20 @@ impl Scanner {
         // 1. candidate transcript files (recent, or touched since a live agent process started)
         let mut keep = HashSet::new();
         let mut sessions: Vec<Session> = Vec::new();
+        // sessions being resumed or already tied to a process load even if they're old
+        let wanted: HashSet<String> = fs::read_to_string(pending_file())
+            .ok()
+            .and_then(|t| serde_json::from_str::<Vec<PendingResume>>(&t).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.key)
+            .chain(self.pinned.values().cloned())
+            .collect();
         for (p, tool) in self.transcript_files() {
             let mt = mtime_ms(&p);
             let near_proc = procs.iter().any(|pr| pr.tool == tool && mt >= pr.start_ms - 5_000);
-            if now - mt > self.recent_window_ms && !near_proc {
+            let is_wanted = wanted.contains(&format!("s:{}", p.display()));
+            if now - mt > self.recent_window_ms && !near_proc && !is_wanted {
                 continue;
             }
             keep.insert(p.clone());
@@ -845,6 +905,47 @@ impl Scanner {
         //    then the most recently written transcript in the same cwd
         let mut taken: HashSet<usize> = HashSet::new();
         let mut orphans = Vec::new();
+
+        // first, processes we can name exactly: already pinned, a session id on the command
+        // line, or a resume whosup just launched
+        let alive: HashSet<u32> = procs.iter().map(|p| p.pid).collect();
+        self.pinned.retain(|pid, _| alive.contains(pid));
+        let mut pending: Vec<PendingResume> =
+            fs::read_to_string(pending_file()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let pending_before = pending.len();
+        pending.retain(|p| now - p.at < 120_000);
+        let mut rest = Vec::new();
+        for pr in procs.drain(..) {
+            let by_pin = self.pinned.get(&pr.pid).cloned();
+            let by_arg = pr.resume_id.as_ref().and_then(|id| {
+                sessions
+                    .iter()
+                    .find(|s| s.tool == pr.tool && !id.is_empty() && (s.t.id == *id || s.key.contains(id.as_str())))
+                    .map(|s| s.key.clone())
+            });
+            let by_pending = pending
+                .iter()
+                .position(|p| p.tool == pr.tool.label() && p.cwd == pr.cwd && pr.start_ms >= p.at - 3_000)
+                .map(|i| pending.remove(i).key);
+            let idx = by_pin
+                .or(by_arg)
+                .or(by_pending)
+                .and_then(|k| sessions.iter().position(|s| s.key == k))
+                .filter(|i| !taken.contains(i));
+            match idx {
+                Some(i) => {
+                    taken.insert(i);
+                    self.pinned.insert(pr.pid, sessions[i].key.clone());
+                    sessions[i].proc = Some(pr);
+                }
+                None => rest.push(pr),
+            }
+        }
+        procs = rest;
+        if pending.len() != pending_before {
+            let _ = fs::write(pending_file(), serde_json::to_string(&pending).unwrap_or_else(|_| "[]".into()));
+        }
+
         for pass in 0..2 {
             let mut rest = Vec::new();
             for pr in procs.drain(..) {
@@ -979,7 +1080,8 @@ impl Scanner {
         sessions.sort_by_key(|s| {
             let live = s.live() || s.running_agents() > 0;
             let key = if live { s.t.started.unwrap_or(s.mtime) } else { s.t.last_ts.unwrap_or(s.mtime) };
-            (!live, std::cmp::Reverse(key), s.key.clone())
+            // sessions waiting for you come first among the live ones
+            (!live, !s.needs_you(), std::cmp::Reverse(key), s.key.clone())
         });
         Snapshot { sessions, orphan_procs: orphans, terminals }
     }

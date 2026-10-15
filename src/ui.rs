@@ -443,6 +443,9 @@ fn header_parts(app: &App) -> HeaderParts {
 
     let mut stats = Vec::new();
     let right: Vec<Span> = if app.view == View::Sessions {
+        let needs = sessions.iter().filter(|s| s.needs_you()).count();
+        stats.extend(stat(needs, if needs == 1 { "needs you" } else { "need you" }, p.green, "●"));
+        stats.push(sep());
         stats.extend(stat(working, "working", p.amber, if working > 0 { spinner() } else { "◌" }));
         stats.push(sep());
         stats.extend(stat(agents, if agents == 1 { "agent running" } else { "agents running" }, p.violet, "◆"));
@@ -472,6 +475,18 @@ fn spans_width(v: &[Span]) -> usize {
     v.iter().map(|s| s.width()).sum()
 }
 
+/// Drop whole stats from the end (they're separated by 3-space spans) until the rest fits,
+/// so the first one, "needs you", is the last to go.
+fn fit_stats(mut stats: Vec<Span<'static>>, avail: usize) -> Vec<Span<'static>> {
+    while spans_width(&stats) > avail {
+        match stats.iter().rposition(|s| s.content == "   ") {
+            Some(i) if i > 0 => stats.truncate(i),
+            _ => return vec![],
+        }
+    }
+    stats
+}
+
 /// Wordmark on the left; tabs, live stats and totals stacked beside it.
 fn draw_tall_header(f: &mut Frame, app: &App, area: Rect) {
     let art = wordmark();
@@ -484,11 +499,9 @@ fn draw_tall_header(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::vertical([Constraint::Length(1); 4]).split(info);
     let rows = [rows[0], rows[1], rows[2]];
     f.render_widget(Line::from(h.tabs), rows[0]);
-    let mut stats = h.stats;
+    let mut stats = fit_stats(h.stats, rows[1].width.saturating_sub(1) as usize);
     stats.insert(0, Span::raw(" "));
-    if spans_width(&stats) <= rows[1].width as usize {
-        f.render_widget(Line::from(stats), rows[1]);
-    }
+    f.render_widget(Line::from(stats), rows[1]);
     let mut right = h.right;
     right.insert(0, Span::raw(" "));
     if spans_width(&right) <= rows[2].width as usize {
@@ -537,16 +550,22 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         );
         return;
     }
+    // Enter resumes a closed session and jumps to a live one
+    let enter_label = match app.selected_target() {
+        Ok(crate::Target::Resume(_)) => "resume",
+        _ => "go to its tab",
+    };
     // (key, label, toggle state, priority: lower survives longer on narrow screens)
     let keys: Vec<(&str, &str, Option<bool>, u8)> = match app.view {
         View::Sessions => vec![
-            ("↵", "go to its tab", None, 0),
+            ("↵", enter_label, None, 0),
             ("tab", "terminals", None, 1),
             ("↑↓", "move", None, 2),
             ("←→", "fold", None, 6),
             ("J K", "scroll", None, 7),
             ("a", "recent", Some(app.show_recent), 3),
             ("f", "hide finished", Some(app.hide_finished), 4),
+            ("n", "notify", Some(app.settings.notify), 4),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),
         ],
@@ -556,6 +575,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("↑↓", "move", None, 2),
             ("s", "show session", None, 3),
             ("J K", "scroll", None, 7),
+            ("n", "notify", Some(app.settings.notify), 4),
             ("t", "theme", None, 5),
             ("q", "quit", None, 0),
         ],
@@ -644,9 +664,13 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from(Span::styled(st.glyph, Style::new().fg(st.color))),
                     Cell::from(Line::from(title)),
                     Cell::from(Span::styled(short_path(&s.t.cwd, 16), Style::new().fg(dim(pal().muted)))),
-                    Cell::from(Span::styled(runs_in(s), Style::new().fg(dim(pal().soft)))),
+                    Cell::from(Span::styled(runs_in(s, app.hosts.get(&s.key)), Style::new().fg(dim(pal().soft)))),
                     Cell::from(Span::styled(short_model(s.t.model.as_deref().unwrap_or("")), Style::new().fg(dim(pal().soft)))),
-                    Cell::from(Span::styled(one_line(&st.label, 20), Style::new().fg(st.color))),
+                    // waiting for you / error: bold, so they stand out from the rest
+                    Cell::from(Span::styled(
+                        one_line(&st.label, 20),
+                        if s.needs_you() { Style::new().fg(st.color).bold() } else { Style::new().fg(st.color) },
+                    )),
                     right(ago(s.t.last_ts.or(Some(s.mtime))), Style::new().fg(dim(pal().muted))),
                     right(money(s.t.cost), Style::new().fg(dim(pal().soft))),
                 ]));
@@ -901,9 +925,10 @@ fn markdown(text: &str, max_lines: usize) -> Vec<Line<'static>> {
 }
 
 /// `s001`, or the app a session runs in when it has no terminal (`VS Code`, `Codex`).
-fn runs_in(s: &Session) -> String {
+fn runs_in(s: &Session, last_host: Option<&String>) -> String {
     if !s.live() {
-        return String::new();
+        // closed: where it last ran, which is where ↵ resumes it
+        return last_host.map(|h| short_app(h)).unwrap_or_default();
     }
     match (&s.tty, &s.host) {
         (Some(t), _) => t.trim_start_matches("tty").to_string(),
@@ -938,6 +963,12 @@ fn goto_line(app: &App) -> Line<'static> {
             key,
             Span::styled(format!(" bring {a} to the front"), Style::new().fg(p.fg).bold()),
         ]),
+        Ok(crate::Target::Resume(plan)) => Line::from(vec![
+            key,
+            Span::styled(format!(" resume in {}", plan.place.describe()), Style::new().fg(p.fg).bold()),
+            Span::styled(format!("  ({})", plan.because), Style::new().fg(p.muted)),
+        ]),
+
         Err(e) => Line::from(vec![
             Span::styled(" ↵ ", Style::new().fg(p.muted).bg(p.select)),
             Span::styled(format!(" {e}"), Style::new().fg(p.muted)),
@@ -1109,7 +1140,25 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
     if let Some(g) = goto {
         let at = lines.len().min(1);
         lines.insert(at, g);
-        lines.insert(at + 1, Line::default());
+        let mut next = at + 1;
+        // for a resume, show exactly what will run
+        if let Ok(crate::Target::Resume(plan)) = app.selected_target() {
+            lines.insert(
+                next,
+                Line::from(vec![
+                    Span::styled("    $ ", Style::new().fg(pal().faint)),
+                    Span::styled(
+                        match std::env::var("HOME") {
+                            Ok(h) if !h.is_empty() => plan.command.replace(&h, "~"),
+                            _ => plan.command.clone(),
+                        },
+                        Style::new().fg(pal().cyan),
+                    ),
+                ]),
+            );
+            next += 1;
+        }
+        lines.insert(next, Line::default());
     }
 
     // clamp scroll to the content (approximate: wrapped lines are counted after rendering width)

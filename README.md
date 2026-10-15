@@ -62,6 +62,11 @@ an agent, sends anything over the network, or changes a file.
   *interrupted* or *error*, updated every second.
 - **Sub-agents nested under their session:** Claude Code Task-tool agents, pi `agent_run` agents
   and pi-subagents background runs, each with its task, model, status, duration and result.
+- **Resume closed sessions.** `↵` on a closed session runs the right resume command for its agent
+  (`pi --session …`, `claude --resume …`, `codex resume …`) in a new tab of the app it last ran
+  in, or your default terminal.
+- **See what needs you.** Sessions waiting for your reply (or stopped by an error) go to the top,
+  in bold, with a count in the header. Turn on **notifications** with `n` to hear when one finishes.
 - **Jump straight to it.** Press `↵` on a session or terminal and its tab comes to the front, in
   Ghostty, iTerm2, Terminal or tmux; for sessions in an editor, the editor comes to the front. The
   **IN** column shows where each one lives, and the details pane says what `↵` will do.
@@ -99,6 +104,7 @@ whosup --once --all         # also include sessions closed in the last 24 hours
 whosup --recent 72          # with `a`, show sessions closed in the last 72 hours
 whosup --dir ~/my-pi-dir    # use a different pi data folder
 whosup --focus ttys003      # bring that tty's tab to the front, then exit
+whosup --resume "auth"      # resume the closed session whose title matches "auth"
 ```
 
 ### Keys
@@ -108,12 +114,13 @@ whosup --focus ttys003      # bring that tty's tab to the front, then exit
 | `tab` · `1` · `2` | Switch between Sessions and Terminals |
 | `↑` `↓` · `j` `k` | Move the selection (`PgUp` / `PgDn`, `g` / `G` jump) |
 | `←` `→` · `h` `l` | Collapse or expand a session's sub-agents (closed sessions start collapsed) |
-| `↵` | Bring the selected session's (or terminal's) tab to the front |
+| `↵` | Live session or terminal: bring its tab to the front. Closed session: resume it |
 | `s` | On a terminal: show the agent session running in it |
 | `J` `K` | Scroll the details pane |
 | `a` | Show recently closed sessions as well as live ones |
 | `f` | Hide finished sub-agents |
-| `t` | Switch between the dark and light theme (remembered in `~/.config/whosup/theme`) |
+| `n` | Turn notifications on or off (remembered) |
+| `t` | Switch between the dark and light theme (remembered) |
 | `r` | Refresh now |
 | `q` · `Esc` | Quit |
 
@@ -140,6 +147,39 @@ Sub-agents show ✓ **done**, ✗ **error**, or ◌ **orphaned** when the sessio
 | opencode, gemini, aider, amp, goose, crush, qwen, cursor-agent, copilot, droid | process only | Folder, uptime, CPU, memory, terminal | — |
 
 Only pi records cost in its transcript; Claude Code and Codex sessions show token counts instead.
+
+## Resuming a closed session
+
+`↵` on a closed session resumes it. The details pane shows exactly what will run, and where.
+
+| Agent | Command |
+| --- | --- |
+| pi | `pi --session <transcript>` |
+| Claude Code | `claude --resume <session id>` |
+| Codex | `codex resume <thread id>` (Codex CLI); desktop-app threads open the Codex app |
+
+It runs in the session's own folder, opened in the first of:
+
+1. **Where it last ran**: whosup remembers the app each session runs in while it watches
+   (`~/.config/whosup/hosts.json`).
+2. **Where it was started**, from the transcript (Claude Code's VS Code extension, the Codex app).
+3. **Your default terminal**: the terminal whosup is running in (Ghostty, iTerm2 or tmux),
+   otherwise Terminal.
+
+In Ghostty, iTerm2, Terminal and tmux it opens a new tab and types the command into your shell, so
+quitting the agent leaves you in that folder. Editors can't be told to run a command in their
+terminal, so whosup opens the folder in the editor and copies the command for you to paste.
+
+## Needs you and notifications
+
+A live session **needs you** when it has finished its turn, or stopped with an error, and is
+waiting for your next message. These sessions sort to the top of the list, their status is bold,
+and the header counts them.
+
+With notifications on (`n`), whosup sends a macOS notification when a session goes from working
+to waiting for you, or to an error. They appear under Script Editor, the app macOS uses for
+`osascript` notifications, so allow notifications for it in System Settings if none show up.
+Settings live in `~/.config/whosup/config`.
 
 ## Sessions in editors
 
