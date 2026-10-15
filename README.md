@@ -1,5 +1,7 @@
 <div align="center">
 
+[![CI](https://github.com/kav-sw19/whosup/actions/workflows/ci.yml/badge.svg)](https://github.com/kav-sw19/whosup/actions/workflows/ci.yml)
+
 ```
 ██    ██ ██  ██  ████   █████ ██  ██ █████
 ██    ██ ██  ██ ██  ██ ██     ██  ██ ██  ██
