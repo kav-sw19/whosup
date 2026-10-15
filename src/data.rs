@@ -138,8 +138,8 @@ pub struct Transcript {
     /// the last tool call (name + arguments) and how many times in a row it was made
     pub(crate) last_call: Option<String>,
     pub call_repeats: u32,
-    /// every tool call's (name, arguments), newest last, for files-touched and friends
-    pub(crate) last_call_args: Option<String>,
+    /// files this session wrote: (absolute path, when), most recent last
+    pub files: Vec<(String, i64)>,
     /// this file is itself a sub-agent transcript (keep sidechain lines)
     pub(crate) sidechain_file: bool,
 }
@@ -268,12 +268,56 @@ impl Transcript {
             self.call_repeats = 1;
             self.last_call = Some(sig);
         }
-        self.last_call_args = Some(args.to_string());
         self.note_files(name, args);
     }
 
-    /// Files a tool call writes (filled in by the files-touched feature).
-    pub(crate) fn note_files(&mut self, _name: &str, _args: &Value) {}
+    /// Files a tool call writes: pi `edit`/`write`, Claude Code `Edit`/`Write`/`MultiEdit`/
+    /// `NotebookEdit`, and `*** Update File:` lines in Codex's `apply_patch`.
+    pub(crate) fn note_files(&mut self, name: &str, args: &Value) {
+        let mut paths: Vec<String> = Vec::new();
+        let lname = name.to_lowercase();
+        if matches!(lname.as_str(), "edit" | "write" | "multiedit" | "notebookedit" | "multi_edit" | "write_file" | "edit_file") {
+            for k in ["file_path", "path", "filePath", "notebook_path"] {
+                if let Some(p) = args.get(k).and_then(Value::as_str) {
+                    paths.push(p.to_string());
+                    break;
+                }
+            }
+        }
+        // Codex's apply_patch: as its own tool (the patch is the input), or a shell command that
+        // starts with `apply_patch` (patch text merely mentioned in some other call doesn't count)
+        let command = args
+            .get("cmd")
+            .or(args.get("command"))
+            .map(|c| match c {
+                Value::Array(parts) => parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "),
+                other => other.as_str().unwrap_or("").to_string(),
+            })
+            .unwrap_or_default();
+        let is_patch = lname == "apply_patch" || command.trim_start().starts_with("apply_patch");
+        let text = match args {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        if is_patch {
+            for line in text.split(['\n', '\\']).map(|l| l.trim_start_matches('n')) {
+                for tag in ["*** Update File: ", "*** Add File: ", "*** Delete File: "] {
+                    if let Some(p) = line.strip_prefix(tag) {
+                        paths.push(p.trim().trim_end_matches('"').to_string());
+                    }
+                }
+            }
+        }
+        let when = self.last_ts.unwrap_or(0);
+        for p in paths {
+            let abs = if p.starts_with('/') || self.cwd.is_empty() { p } else { format!("{}/{}", self.cwd.trim_end_matches('/'), p) };
+            self.files.retain(|(f, _)| *f != abs);
+            self.files.push((abs, when));
+        }
+        if self.files.len() > 300 {
+            self.files.drain(..self.files.len() - 300);
+        }
+    }
 
     /// Short description of what the transcript is doing right now.
     pub fn activity(&self) -> String {
@@ -406,6 +450,9 @@ pub struct Agent {
 
 #[derive(Clone, Debug)]
 pub struct Session {
+    /// files this session and another live one both edited in the last hour: (path, other
+    /// session's title, its tty)
+    pub shared_files: Vec<(String, String, Option<String>)>,
     /// waiting for you to approve a tool call (see `approval_pending`)
     pub awaiting_approval: bool,
     pub tool: Tool,
@@ -524,6 +571,34 @@ fn mtime_ms(p: &Path) -> i64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Fill in `shared_files` for live sessions that edited the same file within the last hour.
+pub fn mark_shared_files(sessions: &mut [Session], now: i64) {
+    let hour = 60 * 60_000;
+    let recent: Vec<(usize, Vec<String>)> = sessions
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.live())
+        .map(|(i, s)| (i, s.t.files.iter().filter(|(_, at)| now - at < hour).map(|(f, _)| f.clone()).collect()))
+        .collect();
+    let mut shared: Vec<(usize, String, String, Option<String>)> = Vec::new();
+    for (i, files) in &recent {
+        for (j, other) in &recent {
+            if i == j {
+                continue;
+            }
+            for f in files.iter().filter(|f| other.contains(f)) {
+                shared.push((*i, f.clone(), sessions[*j].title(), sessions[*j].tty.clone()));
+            }
+        }
+    }
+    for s in sessions.iter_mut() {
+        s.shared_files.clear();
+    }
+    for (i, f, title, tty) in shared {
+        sessions[i].shared_files.push((f, title, tty));
+    }
 }
 
 static STUCK_AFTER_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(10 * 60_000);
@@ -1003,6 +1078,7 @@ impl Scanner {
             }
             crate::cost::fill(&mut t);
             sessions.push(Session {
+                shared_files: vec![],
                 awaiting_approval: false,
                 tool,
                 host: None,
@@ -1156,6 +1232,7 @@ impl Scanner {
             let mut t = Transcript::default();
             t.name = Some("(background runs, no session)".into());
             sessions.push(Session {
+                shared_files: vec![],
                 awaiting_approval: false,
                 tool: Tool::Pi,
                 host: None,
@@ -1211,6 +1288,9 @@ impl Scanner {
                 }
             }
         }
+
+        // two live sessions editing the same file within the last hour
+        mark_shared_files(&mut sessions, now);
 
         self.cache.retain(&keep);
         // Live sessions keep a fixed order (newest first by start time) so rows don't jump as

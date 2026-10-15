@@ -60,6 +60,8 @@ an agent, sends anything over the network, or changes a file.
 - **A Terminals tab** listing every open terminal: its tty, the app that owns it (Ghostty, iTerm2,
   Terminal, tmux, ssh, …), the foreground command, background jobs, folder, CPU and memory.
   `s` on a terminal shows the agent session inside it.
+- **Files changed**, per session, from its edit tool calls, with a warning when two live sessions
+  have edited the same file in the last hour.
 - **A details pane** with the last prompt and reply (lightly formatted Markdown), turns, tool calls,
   tokens, context size and cost (recorded by pi, estimated for Claude Code and Codex).
 - **Fast on large histories.** Transcripts are read incrementally, so multi-megabyte sessions cost

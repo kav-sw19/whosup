@@ -254,3 +254,53 @@ fn stuck_and_looping() {
     assert_eq!(stuck_reason(&t, true, crate::data::now_ms(), 10 * 60_000).as_deref(), Some("looping? Read ×4"));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn files_touched() {
+    let snap = scan_fixtures();
+    let get = |t: &str| snap.sessions.iter().find(|s| s.title() == t).unwrap();
+    // pi `edit` with a relative path, resolved against the session's folder (`read` doesn't count)
+    let pi: Vec<&str> = get("Add rate limiting").t.files.iter().map(|(f, _)| f.as_str()).collect();
+    assert_eq!(pi, vec!["/Users/you/code/api/src/router.rs"]);
+    // Claude Code `Edit`
+    let claude: Vec<&str> = get("Fix login redirect").t.files.iter().map(|(f, _)| f.as_str()).collect();
+    assert_eq!(claude, vec!["/Users/you/code/web/src/login.ts"]);
+    // a patch merely mentioned inside some other tool call is not an edit
+    let mut t = crate::data::Transcript { cwd: "/x".into(), ..Default::default() };
+    t.note_call("bash", &serde_json::json!({"command": "cat > t.rs <<EOF\n*** Begin Patch\n*** Update File: nope.rs\nEOF"}));
+    assert!(t.files.is_empty());
+    t.note_call("exec_command", &serde_json::json!({"cmd": "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: yes.rs\n*** End Patch\nEOF"}));
+    assert_eq!(t.files.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>(), vec!["/x/yes.rs"]);
+
+    // Codex apply_patch, as a custom tool call with the patch as its input
+    let dir = std::env::temp_dir().join(format!("whosup-patch-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("rollout.jsonl");
+    std::fs::write(&f, r#"{"timestamp":"2026-10-15T11:00:00.000Z","type":"session_meta","payload":{"id":"c1","cwd":"/Users/you/code/shop"}}
+{"timestamp":"2026-10-15T11:00:01.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","call_id":"p1","input":"*** Begin Patch\n*** Update File: tests/checkout.spec.ts\n@@\n-a\n+b\n*** Add File: tests/helpers/wait.ts\n+export {}\n*** End Patch"}}
+"#).unwrap();
+    let t = TranscriptCache::default().get(&f, Tool::Codex, false).unwrap();
+    let files: Vec<&str> = t.files.iter().map(|(f, _)| f.as_str()).collect();
+    assert_eq!(files, vec!["/Users/you/code/shop/tests/checkout.spec.ts", "/Users/you/code/shop/tests/helpers/wait.ts"]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn two_live_sessions_editing_one_file() {
+    let mut snap = crate::demo::snapshot();
+    let now = crate::data::now_ms();
+    let live: Vec<usize> = snap.sessions.iter().enumerate().filter(|(_, s)| s.live()).map(|(i, _)| i).take(2).collect();
+    snap.sessions[live[0]].t.files = vec![("/Users/you/code/api/src/limits.rs".into(), now - 60_000)];
+    snap.sessions[live[1]].t.files = vec![
+        ("/Users/you/code/api/src/limits.rs".into(), now - 5_000),
+        ("/Users/you/code/api/README.md".into(), now - 5_000),
+    ];
+    // an edit from two hours ago doesn't count
+    let closed = snap.sessions.iter().position(|s| !s.live()).unwrap();
+    snap.sessions[closed].t.files = vec![("/Users/you/code/api/src/limits.rs".into(), now)];
+    crate::data::mark_shared_files(&mut snap.sessions, now);
+    assert_eq!(snap.sessions[live[0]].shared_files.len(), 1);
+    assert_eq!(snap.sessions[live[0]].shared_files[0].1, snap.sessions[live[1]].title());
+    assert_eq!(snap.sessions[live[1]].shared_files.len(), 1);
+    assert!(snap.sessions[closed].shared_files.is_empty(), "closed sessions don't count");
+}

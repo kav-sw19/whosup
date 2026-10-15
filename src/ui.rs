@@ -681,6 +681,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     tool_tag(s.tool, live),
                     Span::styled(one_line(&s.title(), 80), title_style),
                 ];
+                // two live sessions editing the same file
+                if live && !s.shared_files.is_empty() {
+                    let n = s.shared_files.iter().map(|(f, _, _)| f).collect::<std::collections::HashSet<_>>().len();
+                    title.push(Span::styled(
+                        format!("  ⚠ {n} shared file{}", if n == 1 { "" } else { "s" }),
+                        Style::new().fg(pal().amber).bold(),
+                    ));
+                }
                 // a live session close to its context limit gets a tag
                 if let Some(used) = s.context_used().filter(|u| live && *u >= 0.8) {
                     let c = if used >= 0.95 { pal().red } else { pal().amber };
@@ -1086,6 +1094,29 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                     "≈ estimated from tokens at list prices (price.<model> in the config)",
                     Style::new().fg(pal().faint),
                 )));
+            }
+            if !s.t.files.is_empty() {
+                lines.push(Line::default());
+                lines.push(section(&format!("Files changed ({})", s.t.files.len())));
+                let root = format!("{}/", s.t.cwd.trim_end_matches('/'));
+                for (f, at) in s.t.files.iter().rev().take(10) {
+                    let shown = f.strip_prefix(&root).map(String::from).unwrap_or_else(|| home_rel(f));
+                    let mut spans = vec![
+                        Span::styled(format!("{:>6}  ", ago(Some(*at))), Style::new().fg(pal().faint)),
+                        Span::styled(shown, Style::new().fg(pal().soft)),
+                    ];
+                    if let Some((_, other, tty)) = s.shared_files.iter().find(|(p, _, _)| p == f) {
+                        let at = tty.as_deref().map(|t| format!(" in {}", t.trim_start_matches("tty"))).unwrap_or_default();
+                        spans.push(Span::styled(
+                            format!("  ⚠ also edited by “{}”{at}", one_line(other, 30)),
+                            Style::new().fg(pal().amber).bold(),
+                        ));
+                    }
+                    lines.push(Line::from(spans));
+                }
+                if s.t.files.len() > 10 {
+                    lines.push(Line::from(Span::styled(format!("        … {} more", s.t.files.len() - 10), Style::new().fg(pal().faint))));
+                }
             }
             if let Some(u) = &s.t.last_user {
                 lines.push(Line::default());

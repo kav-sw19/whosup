@@ -62,6 +62,7 @@ fn session(i: usize, d: S) -> Session {
     };
     let live = d.tty.is_some() || d.host.is_some();
     Session {
+        shared_files: vec![],
         awaiting_approval: false,
         tool: d.tool,
         host: d.host.map(Into::into).or(d.tty.map(|_| "Ghostty".into())),
