@@ -14,7 +14,7 @@
 
 **`top` for your coding agents.**
 
-See every pi, Claude Code, Codex and opencode session you have running, what each one is doing right now, the sub-agents working inside
+See every pi, Claude Code, Codex, opencode, Gemini CLI and aider session you have running, what each one is doing right now, the sub-agents working inside
 it, and every open terminal. Press `↵` to jump straight to its tab.
 
 </div>
@@ -116,7 +116,7 @@ whosup --interrupt ttys003  # press Esc in that tty's tab
 | `y` then `r` `i` `f` `d` `l` | Copy the resume command, session id, transcript path, folder or last reply |
 | `e` | Export the conversation to Markdown in `~/Downloads` |
 | `x` | Stop a live session: then `i` interrupts its turn (presses Esc in its Ghostty or iTerm2 tab) or `k` ends it (SIGTERM) |
-| `N` | Start a new session in the selected session's folder: `1` pi, `2` claude, `3` codex (those on your PATH) |
+| `N` | Start a new session in the selected session's folder: `1` pi, `2` claude, `3` codex, `4` opencode, `5` gemini, `6` aider (those on your PATH) |
 | `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
 | `f` | Hide finished sub-agents |
 | `p` | Group sessions by project (their git repository, else their folder) |
@@ -146,7 +146,9 @@ Sub-agents show ✓ **done**, ✗ **error**, or ◌ **orphaned** when the sessio
 | **Claude Code** | process + transcript | Title, model, status, tokens, prompt and reply, Task-tool sub-agents | `~/.claude/projects/` (`$CLAUDE_CONFIG_DIR`) |
 | **Codex** | process or desktop app + transcript | Thread name, model, status, tokens, prompt and reply, multi-agent sub-agents (`spawn_agent` calls and child threads naming their parent; not yet checked against a real multi-agent run) | `~/.codex/sessions/` (`$CODEX_HOME`) |
 | **opencode** | process + its SQLite database | Title, model, status (thinking, the tool running, waiting for you, error), cost, tokens, prompt and reply, sub-agents (child sessions), conversation, resume (`opencode -s`) | `~/.local/share/opencode/opencode.db` (`$XDG_DATA_HOME`), read-only via `sqlite3` |
-| gemini, aider, amp, goose, crush, qwen, cursor-agent, copilot, droid | process only | Folder, uptime, CPU, memory, terminal | — |
+| **Gemini CLI** | process + its session files | Title, model, status (incl. waiting for approval), tokens, prompt and reply, conversation, resume (`gemini --resume`) | `~/.gemini/tmp/<project hash>/chats/` (`$GEMINI_CLI_HOME`); the folder is found by hashing folders whosup knows |
+| **aider** | process + `.aider.chat.history.md` | Each `# aider chat started at` block as a session: prompt and reply, model, tokens, cost, files edited, conversation, resume (`aider --restore-chat-history`) | the history file in the project; folders where aider ran are remembered in `~/.config/whosup/aider-folders.json` |
+| amp, goose, crush, qwen, cursor-agent, copilot, droid | process only | Folder, uptime, CPU, memory, terminal | — |
 
 pi records its own cost. For Claude Code and Codex, whosup estimates cost from their token counts
 (input, output, cache reads and writes) at list prices, shown with `≈`. Set your own rates with
@@ -159,6 +161,9 @@ through the API, not what you pay.
 
 | Agent | Command |
 | --- | --- |
+| opencode | `opencode -s <session id>` |
+| Gemini CLI | `gemini --resume <session id>` |
+| aider | `aider --restore-chat-history` |
 | pi | `pi --session <transcript>` |
 | Claude Code | `claude --resume <session id>` |
 | Codex | `codex resume <thread id>` (Codex CLI); desktop-app threads open the Codex app |

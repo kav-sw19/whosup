@@ -226,6 +226,18 @@ pub fn load(path: &Path, tool: Tool, sidechain_file: bool) -> Vec<Item> {
     if tool == Tool::Opencode {
         return crate::opencode::id_of(path).map(|id| crate::opencode::conversation(&crate::opencode::db_path(), &id)).unwrap_or_default();
     }
+    if tool == Tool::Gemini {
+        return std::fs::read_to_string(path).map(|t| crate::more_agents::gemini_conversation(&t)).unwrap_or_default();
+    }
+    if tool == Tool::Aider {
+        let Some((file, started)) = crate::more_agents::aider_parts(path) else { return vec![] };
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        return crate::more_agents::aider_blocks(&text, crate::export::local_offset())
+            .into_iter()
+            .find(|b| b.started == started)
+            .map(|b| crate::more_agents::aider_conversation(&b))
+            .unwrap_or_default();
+    }
     let Ok(text) = std::fs::read_to_string(path) else { return vec![] };
     let mut out = Vec::new();
     for line in text.lines() {
@@ -234,7 +246,7 @@ pub fn load(path: &Path, tool: Tool, sidechain_file: bool) -> Vec<Item> {
             Tool::Pi => pi_line(&v, &mut out),
             Tool::Claude => claude_line(&v, &mut out, sidechain_file),
             Tool::Codex => codex_line(&v, &mut out),
-            Tool::Opencode | Tool::Other(_) => {}
+            Tool::Opencode | Tool::Gemini | Tool::Aider | Tool::Other(_) => {}
         }
     }
     out

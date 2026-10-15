@@ -13,6 +13,8 @@ pub enum Tool {
     Claude,
     Codex,
     Opencode,
+    Gemini,
+    Aider,
     /// A known agent CLI with no transcript support: shown from its process only.
     Other(&'static str),
 }
@@ -24,6 +26,8 @@ impl Tool {
             Tool::Claude => "claude",
             Tool::Codex => "codex",
             Tool::Opencode => "opencode",
+            Tool::Gemini => "gemini",
+            Tool::Aider => "aider",
             Tool::Other(n) => n,
         }
     }
@@ -47,8 +51,8 @@ impl Tool {
                 "claude" => Tool::Claude,
                 "codex" => Tool::Codex,
                 "opencode" => Tool::Opencode,
-                "gemini" => Tool::Other("gemini"),
-                "aider" => Tool::Other("aider"),
+                "gemini" => Tool::Gemini,
+                "aider" => Tool::Aider,
                 "amp" => Tool::Other("amp"),
                 "goose" => Tool::Other("goose"),
                 "crush" => Tool::Other("crush"),

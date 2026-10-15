@@ -115,6 +115,8 @@ pub fn tool_color(t: Tool) -> Color {
         Tool::Claude => pal().orange,
         Tool::Codex => pal().teal,
         Tool::Opencode => pal().cyan,
+        Tool::Gemini => pal().violet,
+        Tool::Aider => pal().green,
         Tool::Other(_) => pal().violet,
     }
 }

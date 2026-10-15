@@ -1,6 +1,7 @@
 mod cost;
 mod convo;
 mod data;
+mod more_agents;
 mod opencode;
 mod export;
 mod models;
@@ -445,7 +446,8 @@ impl App {
             }
             _ => return self.flash("Select a session or agent to read its conversation", true),
         };
-        if path.as_os_str().is_empty() || (!path.exists() && opencode::id_of(&path).is_none()) {
+        let virtual_path = opencode::id_of(&path).is_some() || more_agents::aider_parts(&path).is_some();
+        if path.as_os_str().is_empty() || (!path.exists() && !virtual_path) {
             return self.flash("No transcript for this session", true);
         }
         let mut v = ConvoView { title, tool, path, sidechain, size: u64::MAX, items: vec![], from_bottom: 0 };
@@ -1546,6 +1548,7 @@ mod history_tests {
             s.claude_dir = fixtures.join("claude");
             s.codex_dir = fixtures.join("codex");
             s.opencode_db = fixtures.join("none.db");
+            s.gemini_dir = fixtures.join("none");
             s.scan().sessions.len()
         };
         // the fixture files are older than a second, so a 1 ms window loads none of them

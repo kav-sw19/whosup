@@ -19,6 +19,7 @@ pub fn scan_fixtures() -> Snapshot {
     s.claude_dir = fixtures().join("claude");
     s.codex_dir = fixtures().join("codex");
     s.opencode_db = fixtures().join("opencode/none.db");
+    s.gemini_dir = fixtures().join("gemini");
     s.scan()
 }
 
@@ -380,4 +381,47 @@ fn codex_sub_agents() {
     let refunds = parent.agents.iter().find(|a| a.agent == "refunds").unwrap();
     assert_eq!(refunds.model, "gpt-6-luna");
     assert_eq!(parent.agents.len(), 2, "the refunds spawn and its thread are one agent");
+}
+
+#[test]
+fn gemini_and_aider_discovery() {
+    let root = std::env::temp_dir().join(format!("whosup-more-{}", std::process::id()));
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let folder = project.canonicalize().unwrap().display().to_string();
+    // Gemini: the project folder only as a hash
+    let chats = root.join("gemini/tmp").join(crate::more_agents::sha256_hex(&folder)).join("chats");
+    std::fs::create_dir_all(&chats).unwrap();
+    std::fs::write(
+        chats.join("session-2026-10-15T09-00-g1.jsonl"),
+        format!(
+            "{{\"sessionId\":\"g-1\",\"projectHash\":\"{}\",\"startTime\":\"2026-10-15T09:00:00.000Z\",\"lastUpdated\":\"2026-10-15T09:00:05.000Z\",\"kind\":\"main\"}}\n\
+             {{\"id\":\"u1\",\"timestamp\":\"2026-10-15T09:00:01.000Z\",\"type\":\"user\",\"content\":[{{\"text\":\"tidy the imports\"}}]}}\n\
+             {{\"id\":\"g1\",\"timestamp\":\"2026-10-15T09:00:05.000Z\",\"type\":\"gemini\",\"content\":[{{\"text\":\"Done.\"}}],\"model\":\"gemini-3-pro\",\"tokens\":{{\"input\":10,\"output\":5,\"cached\":0,\"total\":15}}}}\n",
+            crate::more_agents::sha256_hex(&folder)
+        ),
+    )
+    .unwrap();
+    // aider: a history file in the project
+    std::fs::write(project.join(".aider.chat.history.md"), "# aider chat started at 2026-10-15 10:00:00\n\n#### rename the config loader\n\nRenamed it.\n\n> Applied edit to src/config.py\n").unwrap();
+
+    let mut s = Scanner::new(fixtures().join("pi"), i64::MAX / 4);
+    s.claude_dir = fixtures().join("claude");
+    s.codex_dir = fixtures().join("codex");
+    s.opencode_db = root.join("none.db");
+    s.gemini_dir = root.join("gemini");
+    s.extra_folders = vec![folder.clone()];
+    let snap = s.scan();
+    let g = snap.sessions.iter().find(|x| x.tool == Tool::Gemini).expect("gemini session");
+    assert_eq!((g.title().as_str(), g.t.cwd.as_str()), ("tidy the imports", folder.as_str()));
+    let a = snap.sessions.iter().find(|x| x.tool == Tool::Aider).expect("aider session");
+    assert_eq!(a.title(), "rename the config loader");
+    assert_eq!(a.t.files[0].0, format!("{folder}/src/config.py"));
+    // the conversation view reads both
+    assert_eq!(crate::convo::load(&a.path, Tool::Aider, false).len(), 3);
+    assert_eq!(crate::convo::load(&g.path, Tool::Gemini, false).len(), 2);
+    // and both can be resumed
+    assert_eq!(crate::resume::plan(g, None).unwrap().command, "gemini --resume 'g-1'");
+    assert_eq!(crate::resume::plan(a, None).unwrap().command, "aider --restore-chat-history");
+    std::fs::remove_dir_all(&root).ok();
 }

@@ -157,7 +157,7 @@ impl Transcript {
             Tool::Pi => self.ingest_pi(&v),
             Tool::Claude => self.ingest_claude(&v),
             Tool::Codex => self.ingest_codex(&v),
-            Tool::Opencode | Tool::Other(_) => {}
+            Tool::Opencode | Tool::Gemini | Tool::Aider | Tool::Other(_) => {}
         }
     }
 
@@ -509,6 +509,24 @@ impl Session {
                 .unwrap_or_else(|| "(new session)".into())
         })
     }
+    /// A session not yet tied to a process or terminal.
+    pub fn from_transcript(tool: Tool, path: PathBuf, t: Transcript, mtime: i64) -> Session {
+        Session {
+            shared_files: vec![],
+            awaiting_approval: false,
+            tool,
+            host: None,
+            app_live: false,
+            key: format!("s:{}", path.display()),
+            tty: None,
+            path,
+            t,
+            mtime,
+            proc: None,
+            agents: vec![],
+        }
+    }
+
     /// Live and waiting on you: finished its turn, hit an error, wants a tool call approved, or
     /// looks stuck.
     pub fn needs_you(&self) -> bool {
@@ -557,6 +575,11 @@ pub struct Scanner {
     /// pid -> session key for processes already tied to a session, kept while the pid lives
     pinned: HashMap<u32, String>,
     pub opencode_db: PathBuf,
+    pub gemini_dir: PathBuf,
+    /// more folders to look in for aider histories and Gemini project hashes
+    pub extra_folders: Vec<String>,
+    /// whole-file parses (Gemini sessions, aider histories): path -> (len, mtime, parsed)
+    whole_files: HashMap<PathBuf, (u64, i64, Vec<(Transcript, i64)>)>,
     /// last opencode query: (database stamp, since, when queried, sessions)
     opencode_cache: Option<((i64, i64), i64, i64, Vec<crate::opencode::OcSession>)>,
 }
@@ -838,6 +861,9 @@ impl Scanner {
             codex_index_mtime: 0,
             pinned: HashMap::new(),
             opencode_db: crate::opencode::db_path(),
+            gemini_dir: crate::more_agents::gemini_dir(),
+            extra_folders: vec![],
+            whole_files: HashMap::new(),
             opencode_cache: None,
         }
     }
@@ -1106,6 +1132,80 @@ impl Scanner {
         children
     }
 
+    /// Parse a whole file again only when it changed.
+    fn whole_file(&mut self, path: &Path, parse: impl Fn(&str, i64) -> Vec<(Transcript, i64)>) -> Vec<(Transcript, i64)> {
+        let len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let mt = mtime_ms(path);
+        if let Some((l, m, v)) = self.whole_files.get(path) {
+            if *l == len && *m == mt {
+                return v.clone();
+            }
+        }
+        let parsed = fs::read_to_string(path).map(|t| parse(&t, mt)).unwrap_or_default();
+        self.whole_files.insert(path.to_path_buf(), (len, mt, parsed.clone()));
+        parsed
+    }
+
+    fn load_gemini_and_aider(&mut self, now: i64, procs: &[ProcInfo], sessions: &mut Vec<Session>) {
+        use crate::more_agents as ma;
+        // every folder we know about: other sessions', running agents', home
+        let mut folders: HashSet<String> = sessions.iter().map(|s| s.t.cwd.clone()).filter(|c| !c.is_empty()).collect();
+        folders.extend(procs.iter().map(|p| p.cwd.clone()));
+        if let Ok(h) = std::env::var("HOME") {
+            folders.insert(h);
+        }
+        folders.extend(self.extra_folders.iter().cloned());
+        let window = self.recent_window_ms;
+        let live_cwds: HashSet<String> = procs.iter().filter(|p| matches!(p.tool, Tool::Gemini | Tool::Aider)).map(|p| p.cwd.clone()).collect();
+
+        // Gemini CLI
+        let hashes: HashMap<String, String> = folders.iter().map(|f| (ma::sha256_hex(f), f.clone())).collect();
+        for f in ma::gemini_files(&self.gemini_dir) {
+            let mt = mtime_ms(&f);
+            // outside the window, unless a Gemini CLI is running (it may have resumed it)
+            if now - mt > window && !procs.iter().any(|p| p.tool == Tool::Gemini) {
+                continue;
+            }
+            let hashes = hashes.clone();
+            for (mut t, mtime) in self.whole_file(&f, move |text, mt| ma::gemini_transcript(text, &hashes).map(|t| vec![(t, mt)]).unwrap_or_default()) {
+                crate::cost::fill(&mut t);
+                sessions.push(Session::from_transcript(Tool::Gemini, f.clone(), t, mtime));
+            }
+        }
+
+        // aider: remembered folders too, so closed sessions can be found
+        let remembered = crate::settings::dir().join("aider-folders.json");
+        let mut aider_folders: HashSet<String> =
+            fs::read_to_string(&remembered).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let before = aider_folders.len();
+        aider_folders.extend(procs.iter().filter(|p| p.tool == Tool::Aider).map(|p| p.cwd.clone()));
+        if aider_folders.len() != before {
+            let _ = fs::create_dir_all(crate::settings::dir());
+            let _ = fs::write(&remembered, serde_json::to_string(&aider_folders).unwrap_or_default());
+        }
+        folders.extend(aider_folders);
+        let offset = crate::export::local_offset();
+        for folder in folders {
+            let file = Path::new(&folder).join(ma::AIDER_HISTORY);
+            if !file.exists() {
+                continue;
+            }
+            let folder2 = folder.clone();
+            for (mut t, mtime) in self.whole_file(&file, move |text, mt| {
+                let blocks = ma::aider_blocks(text, offset);
+                let n = blocks.len();
+                blocks.iter().enumerate().map(|(i, b)| (ma::aider_transcript(b, &folder2, mt, i + 1 == n), if i + 1 == n { mt } else { b.started })).collect()
+            }) {
+                if now - mtime > window && !live_cwds.contains(&folder) {
+                    continue;
+                }
+                crate::cost::fill(&mut t);
+                let path = ma::aider_path(&file, t.started.unwrap_or(0));
+                sessions.push(Session::from_transcript(Tool::Aider, path, t, mtime));
+            }
+        }
+    }
+
     /// Every transcript file of every supported agent.
     fn transcript_files(&self) -> Vec<(PathBuf, Tool)> {
         fn jsonl_in(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -1282,6 +1382,8 @@ impl Scanner {
 
         // opencode: sessions live in its database, not in files
         let opencode_children = self.load_opencode(now, &mut sessions);
+        // Gemini CLI and aider, keyed by folders we know about
+        self.load_gemini_and_aider(now, &procs, &mut sessions);
 
         // 2. match processes to sessions of the same agent: exact start-time match first,
         //    then the most recently written transcript in the same cwd
@@ -1463,7 +1565,7 @@ impl Scanner {
         // waiting for a tool call to be approved?
         for s in sessions.iter_mut() {
             let Some(pr) = &s.proc else { continue };
-            if !matches!(s.tool, Tool::Claude | Tool::Codex) {
+            if !matches!(s.tool, Tool::Claude | Tool::Codex | Tool::Gemini) {
                 continue;
             }
             let requested = s.t.last_ts.unwrap_or(s.mtime);

@@ -12,6 +12,11 @@ pub fn copy(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Seconds east of UTC for local time.
+pub fn local_offset() -> i64 {
+    local_offset_secs()
+}
+
 /// Seconds east of UTC for local time (from `date +%z`), read once.
 fn local_offset_secs() -> i64 {
     static OFF: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
