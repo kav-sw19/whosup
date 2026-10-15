@@ -261,3 +261,7 @@ cargo test --release render -- --ignored --nocapture
 
 Adding an agent with a JSONL transcript means adding it to `Tool`, writing an `ingest_*` parser in
 `providers.rs` and listing its transcript folder in `Scanner::transcript_files`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
