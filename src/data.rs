@@ -99,6 +99,8 @@ pub struct Day {
     pub tokens: u64,
     /// some of the cost was estimated from tokens
     pub estimated: bool,
+    /// how much of `cost` was estimated
+    pub est_cost: f64,
 }
 
 /// Local day number (days since 1970-01-01 in local time).
@@ -290,6 +292,9 @@ impl Transcript {
         d.cost += cost;
         d.tokens += tokens;
         d.estimated |= estimated && cost > 0.0;
+        if estimated {
+            d.est_cost += cost;
+        }
     }
 
     /// Record a tool call, counting identical calls in a row (a loop).

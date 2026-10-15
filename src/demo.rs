@@ -274,5 +274,19 @@ pub fn snapshot() -> Snapshot {
         let key = if live { s.t.started.unwrap_or(0) } else { s.t.last_ts.unwrap_or(0) };
         (!live, !s.needs_you(), std::cmp::Reverse(key))
     });
+    // a believable month of spend for the Usage tab: busier on weekdays, a little each day
+    let today = crate::data::day_of(now_ms());
+    for (i, s) in sessions.iter_mut().enumerate() {
+        let est = s.t.cost_estimated || s.tool != Tool::Pi;
+        for k in 1..30i64 {
+            let weekday = (today - k + 4).rem_euclid(7) < 5; // 1970-01-01 was a Thursday
+            let wave = ((k * 7 + i as i64 * 5) % 11) as f64 / 10.0;
+            if (k + i as i64) % 4 == 0 && !weekday {
+                continue;
+            }
+            let cost = (if weekday { 1.6 } else { 0.4 }) * (0.3 + wave) * (1.0 + i as f64 * 0.35);
+            s.t.daily.insert(today - k, crate::data::Day { cost, tokens: (cost * 380_000.0) as u64, estimated: est, est_cost: if est { cost } else { 0.0 } });
+        }
+    }
     Snapshot { sessions, orphan_procs: vec![], terminals }
 }

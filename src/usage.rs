@@ -31,6 +31,7 @@ fn add(d: &mut Day, x: &Day) {
     d.cost += x.cost;
     d.tokens += x.tokens;
     d.estimated |= x.estimated;
+    d.est_cost += x.est_cost;
 }
 
 pub fn build(sessions: &[Session], project_of: &dyn Fn(&str) -> String, today: i64, range_days: i64) -> Report {
@@ -47,7 +48,8 @@ pub fn build(sessions: &[Session], project_of: &dyn Fn(&str) -> String, today: i
                 let day = day_of(at);
                 if (first..=today).contains(&day) {
                     let est = matches!(a.source, AgentSource::ClaudeTask | AgentSource::CodexAgent);
-                    days.push((day, Day { cost: a.cost, tokens: a.tokens, estimated: est && a.cost > 0.0 }));
+                    let estimated = est && a.cost > 0.0;
+                    days.push((day, Day { cost: a.cost, tokens: a.tokens, estimated, est_cost: if estimated { a.cost } else { 0.0 } }));
                 }
             }
         }

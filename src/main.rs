@@ -678,6 +678,9 @@ impl App {
         }
         if self.demo {
             self.snap = demo::snapshot();
+            if self.view == View::Usage {
+                self.build_usage();
+            }
             self.rebuild_rows();
             return;
         }
@@ -749,7 +752,7 @@ impl App {
     /// Recompute the Usage report (loading enough history to cover its range).
     fn build_usage(&mut self) {
         let need = self.usage_days * 24 * 3_600_000;
-        if self.scanner.recent_window_ms < need {
+        if self.scanner.recent_window_ms < need && !self.demo {
             self.scanner.recent_window_ms = need;
             self.snap = self.scanner.scan();
         }
@@ -1431,7 +1434,7 @@ mod screenshots {
         let (tw, th) = (w + PAD * 2.0, h + PAD * 2.0 + BAR);
         let mut o = String::new();
         o += &format!(
-            "<svg xmlns='http://www.w3.org/2000/svg' width='{tw}' height='{th}' viewBox='0 0 {tw} {th}'>\n\
+            "<svg xmlns='http://www.w3.org/2000/svg' width='{tw}' height='{th}' viewBox='0 0 {tw} {th}' shape-rendering='crispEdges'>\n\
              <rect width='{tw}' height='{th}' rx='12' fill='{bg}'/>\n\
              <rect width='{tw}' height='{BAR}' rx='12' fill='{chrome}'/><rect y='{y}' width='{tw}' height='12' fill='{chrome}'/>\n\
              <circle cx='22' cy='17' r='6' fill='#ff5f57'/><circle cx='42' cy='17' r='6' fill='#febc2e'/><circle cx='62' cy='17' r='6' fill='#28c840'/>\n\
@@ -1488,6 +1491,12 @@ mod screenshots {
                     "▀" => Some(format!("<rect x='{l:.1}' y='{t:.1}' width='{:.1}' height='{:.1}' fill='{f}'/>\n", CW + 0.4, CH / 2.0 + 0.3)),
                     "▄" => Some(format!("<rect x='{l:.1}' y='{mid:.1}' width='{:.1}' height='{:.1}' fill='{f}'/>\n", CW + 0.4, CH / 2.0 + 0.4)),
                     "▌" => Some(format!("<rect x='{l:.1}' y='{t:.1}' width='{:.1}' height='{CH}' fill='{f}'/>\n", CW * 0.4)),
+                    // lower eighth blocks (bar charts): exact rectangles, not font glyphs
+                    "▁" | "▂" | "▃" | "▅" | "▆" | "▇" => {
+                        let eighths = "▁▂▃▄▅▆▇".chars().position(|c| sym.starts_with(c)).unwrap_or(0) as f32 + 1.0;
+                        let hh = CH * eighths / 8.0;
+                        Some(format!("<rect x='{l:.1}' y='{:.1}' width='{:.1}' height='{:.1}' fill='{f}'/>\n", b - hh, CW + 0.4, hh + 0.3))
+                    }
                     "─" => Some(line(format!("M{l:.1} {mid:.1}H{r:.1}"))),
                     "│" => Some(line(format!("M{m:.1} {t:.1}V{b:.1}"))),
                     "╭" => Some(line(format!("M{r:.1} {mid:.1}Q{m:.1} {mid:.1} {m:.1} {b:.1}"))),
@@ -1547,6 +1556,97 @@ mod screenshots {
         let chrome = if light { "#e9ebf2" } else { "#15161f" };
         std::fs::create_dir_all("docs").unwrap();
         std::fs::write(format!("docs/{file}"), svg(t.backend().buffer(), &bg, &fg, "whosup", chrome)).unwrap();
+    }
+
+    /// The README's demo GIF, frame by frame: `cargo test --release demo_gif -- --ignored`
+    /// writes target/gif/NNNN.svg plus target/gif/delays.txt (hundredths of a second each).
+    #[test]
+    #[ignore]
+    fn demo_gif() {
+        unsafe { std::env::set_var("HOME", "/Users/you") };
+        let out = PathBuf::from("target/gif");
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        ui::set_light(false);
+        let mut app = App::new_demo(Scanner::new(PathBuf::from("/nonexistent"), 24 * 3_600_000));
+        app.settings.light = false;
+        ui::set_light(false);
+        app.settings.notify = true;
+        let (w, h) = (140u16, 30u16);
+        let mut n = 0usize;
+        let mut delays = String::new();
+        // `frames` renders of the current state, 100ms apart so the spinners turn
+        let mut shoot = |app: &mut App, frames: usize| {
+            for _ in 0..frames {
+                let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+                t.draw(|f| ui::draw(f, app)).unwrap();
+                let p = ui::pal();
+                let bg = hex(p.bg.unwrap_or(Color::Rgb(26, 27, 38)), "#1a1b26");
+                let fg = hex(p.fg, "#c0caf5");
+                let chrome = if ui::is_light() { "#e9ebf2" } else { "#15161f" };
+                std::fs::write(out.join(format!("{n:04}.svg")), svg(t.backend().buffer(), &bg, &fg, "whosup", chrome)).unwrap();
+                delays.push_str("10\n");
+                n += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        };
+        let select = |app: &mut App, title: &str| {
+            let key = app.snap.sessions.iter().find(|s| s.title() == title).map(|s| s.key.clone());
+            app.selected_key = key;
+            app.rebuild_rows();
+        };
+        let flash = |app: &mut App, text: &str| app.flash = Some(Flash { text: text.into(), error: false, at: Instant::now() });
+
+        // 1. the list, walking down a session and its sub-agents
+        shoot(&mut app, 14);
+        for _ in 0..4 {
+            app.move_sel(1);
+            shoot(&mut app, 6);
+        }
+        // 2. the Claude session stops to ask for approval: it jumps up as "needs you"
+        select(&mut app, "Fix flaky checkout test");
+        shoot(&mut app, 6);
+        if let Some(s) = app.snap.sessions.iter_mut().find(|s| s.title() == "Add rate limiting to the public API") {
+            s.awaiting_approval = true;
+            s.t.last_tool = Some("Edit".into());
+        }
+        app.snap.sessions.sort_by_key(|s| (!s.live(), !s.needs_you(), std::cmp::Reverse(s.t.started.unwrap_or(0))));
+        select(&mut app, "Add rate limiting to the public API");
+        flash(&mut app, "Notification: Approve Edit? · claude · s002");
+        shoot(&mut app, 22);
+        // 3. search
+        app.flash = None;
+        app.searching = true;
+        for c in "redis".chars() {
+            app.query.push(c);
+            app.rebuild_rows();
+            shoot(&mut app, 3);
+        }
+        shoot(&mut app, 12);
+        app.searching = false;
+        app.query.clear();
+        app.rebuild_rows();
+        select(&mut app, "Add rate limiting to the public API");
+        // 4. Enter jumps to its tab
+        flash(&mut app, "Switched to s002 in Ghostty");
+        shoot(&mut app, 16);
+        // 5. Terminals, then Usage
+        app.flash = None;
+        app.set_view(View::Terminals);
+        app.move_sel(1);
+        shoot(&mut app, 16);
+        app.set_view(View::Usage);
+        app.refresh();
+        app.flash = None;
+        shoot(&mut app, 26);
+        // 6. the light theme
+        app.set_view(View::Sessions);
+        ui::set_light(true);
+        flash(&mut app, "Light theme");
+        select(&mut app, "Migrate auth to OAuth 2.1");
+        shoot(&mut app, 22);
+        ui::set_light(false);
+        std::fs::write(out.join("delays.txt"), delays).unwrap();
     }
 
     #[test]

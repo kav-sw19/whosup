@@ -19,10 +19,17 @@ it, and every open terminal. Press `↵` to jump straight to its tab.
 
 </div>
 
+<img alt="whosup in action: sessions from pi, Claude Code and Codex with their sub-agents; a Claude session stops to ask for approval and jumps to the top; a search; jumping to a terminal tab; the Terminals and Usage tabs; the light theme" src="docs/whosup-demo.gif">
+
+<details>
+<summary>Still screenshots (dark and light)</summary>
+
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/whosup-light.png">
   <img alt="whosup showing three live sessions (Codex waiting for you, Claude Code editing with two sub-agents, pi thinking) and two recently closed ones, with the selected session's details on the right" src="docs/whosup-dark.png">
 </picture>
+
+</details>
 
 ## Why
 
@@ -319,6 +326,11 @@ The README images are the real UI rendered from `--demo` data, cell by cell:
 cargo test --release screenshots -- --ignored      # writes docs/*.svg
 swiftc -O docs/svg2png.swift -o /tmp/svg2png
 for f in docs/*.svg; do /tmp/svg2png "$f" "${f%.svg}.png" 2; done && rm docs/*.svg
+
+# the demo GIF: a scripted run of the demo, rendered frame by frame
+cargo test --release demo_gif -- --ignored         # writes target/gif/*.svg
+for f in target/gif/*.svg; do /tmp/svg2png "$f" "${f%.svg}.png" 1; done
+magick -delay 10 -loop 0 target/gif/*.png -layers Optimize docs/whosup-demo.gif
 ```
 
 ## Releasing

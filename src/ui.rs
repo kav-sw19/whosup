@@ -487,7 +487,7 @@ fn header_parts(app: &App) -> HeaderParts {
     tabs.extend(tab("Usage", None, "3", app.view == View::Usage));
 
     let mut stats = Vec::new();
-    let right: Vec<Span> = if app.view == View::Sessions {
+    let right: Vec<Span> = if app.view != View::Terminals {
         let needs = sessions.iter().filter(|s| s.needs_you()).count();
         stats.extend(stat(needs, if needs == 1 { "needs you" } else { "need you" }, p.green, "●"));
         stats.push(sep());
@@ -638,7 +638,9 @@ fn draw_usage(f: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(p.faint),
         )];
         for (i, (_, d)) in u.days.iter().enumerate() {
+            // stacked: recorded spend at the bottom, estimated on top
             let frac = if max > 0.0 { d.cost / max * h as f64 } else { 0.0 };
+            let recorded = if max > 0.0 { (d.cost - d.est_cost).max(0.0) / max * h as f64 } else { 0.0 };
             let full = frac.floor() as usize;
             let cell = if level_from_top <= full {
                 "█".to_string()
@@ -647,7 +649,13 @@ fn draw_usage(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 String::new()
             };
-            let color = if i + 1 == n { p.blue } else if d.estimated { p.violet } else { p.teal };
+            let color = if i + 1 == n {
+                p.blue
+            } else if (level_from_top as f64) <= recorded.round().max(if recorded > 0.0 { 1.0 } else { 0.0 }) {
+                p.teal
+            } else {
+                p.violet
+            };
             spans.push(Span::styled(format!("{:<w$}", cell.repeat(col_w.saturating_sub(1).max(1)), w = col_w), Style::new().fg(color)));
         }
         rows.push(Line::from(spans));
@@ -675,7 +683,7 @@ fn draw_usage(f: &mut Frame, app: &App, area: Rect) {
         Span::styled("█", Style::new().fg(p.teal)),
         Span::styled(" recorded   ", Style::new().fg(p.muted)),
         Span::styled("█", Style::new().fg(p.violet)),
-        Span::styled(" includes estimates (≈)   ", Style::new().fg(p.muted)),
+        Span::styled(" estimated (≈)   ", Style::new().fg(p.muted)),
         Span::styled("█", Style::new().fg(p.blue)),
         Span::styled(" today", Style::new().fg(p.muted)),
     ]));
