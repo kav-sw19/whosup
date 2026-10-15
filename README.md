@@ -1,26 +1,22 @@
-<div align="center">
+# whosup
+
+**`top` for your coding agents.** See every Claude Code, Codex, pi, opencode, Gemini CLI and aider
+session you have running, what each one is doing and whether it needs you, plus the terminals and
+ports they're using. Press `↵` to jump straight to its tab.
 
 [![CI](https://github.com/kav-sw19/whosup/actions/workflows/ci.yml/badge.svg)](https://github.com/kav-sw19/whosup/actions/workflows/ci.yml)
-
-```
-██    ██ ██  ██  ████   █████ ██  ██ █████
-██    ██ ██  ██ ██  ██ ██     ██  ██ ██  ██
-██    ██ ██  ██ ██  ██ ██     ██  ██ ██  ██
-██ ██ ██ ██████ ██  ██  ████  ██  ██ █████
-██ ██ ██ ██  ██ ██  ██     ██ ██  ██ ██
-████████ ██  ██ ██  ██     ██ ██  ██ ██
- ██  ██  ██  ██  ████  █████   ████  ██
-```
-
-**`top` for your coding agents.**
-
-See every pi, Claude Code, Codex, opencode, Gemini CLI and aider session you have running, what
-each one is doing right now and the sub-agents working inside it, plus every open terminal and every
-port your dev servers hold open. Press `↵` to jump straight to its tab.
-
-</div>
+[![Release](https://img.shields.io/github/v/release/kav-sw19/whosup)](https://github.com/kav-sw19/whosup/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
 
 <img alt="whosup in action: sessions from pi, Claude Code and Codex with their sub-agents; a Claude session stops to ask for approval and jumps to the top; a search; jumping to a terminal tab; the Terminals tab; the Ports tab: opening a dev server an agent started and closing a detached one; the Usage tab; the light theme" src="docs/whosup-demo.gif">
+
+```sh
+brew install kav-sw19/tap/whosup
+whosup --demo   # look around with made-up sessions first
+```
+
+Other ways to install are under [Install](#install).
 
 ## Why
 
@@ -91,7 +87,9 @@ sessions count on the day of their last activity.
 
 ### The Ports tab
 
-(Screenshot in the fold-out at the top.) `↵` goes to the terminal the server runs in, `s` shows the agent session that started it, `o` opens
+<img alt="whosup's Ports tab: eight listening ports; a Next.js server started from a VS Code terminal and open to the network, a detached Astro server, a Vite server started by a pi session and two by a Claude Code session, then ports held by apps" src="docs/whosup-ports.png">
+
+`↵` goes to the terminal the server runs in, `s` shows the agent session that started it, `o` opens
 `http://localhost:<port>`, and `x` closes the port: `k` ends the process holding it (SIGTERM) and
 `9` force-kills it. Ports started from your terminals and agents, or running in one of your folders,
 come first; ports held by apps (Spotify, Postgres.app, …) are listed under *other apps*. Only your
