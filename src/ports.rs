@@ -19,6 +19,8 @@ pub struct Port {
     pub tty: Option<String>,
     /// the agent session it was started from (the process or one of its parents is the agent)
     pub session: Option<SessionLink>,
+    /// it runs in one of your folders (under your home, outside ~/Library)
+    pub in_your_folder: bool,
 }
 
 impl Port {
@@ -39,10 +41,13 @@ impl Port {
         if self.tty.is_some() || self.session.is_some() {
             return false;
         }
-        let home = std::env::var("HOME").unwrap_or_default();
-        let cwd = self.proc.cwd.as_str();
-        !home.is_empty() && cwd.starts_with(&format!("{home}/")) && !cwd.starts_with(&format!("{home}/Library"))
+        self.in_your_folder
     }
+}
+
+fn in_your_folder(cwd: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    !home.is_empty() && cwd.starts_with(&format!("{home}/")) && !cwd.starts_with(&format!("{home}/Library"))
 }
 
 pub fn is_loopback(addr: &str) -> bool {
@@ -110,7 +115,8 @@ pub fn scan(sys: &System) -> Vec<Port> {
                 None => Proc { pid, name: command.clone(), cmdline: command, cwd: String::new(), start_ms: 0, cpu: 0.0, mem: 0 },
             };
             let tty = row.map(|r| r.tty.clone()).filter(|t| !t.is_empty() && t != "??" && t != "-");
-            Port { key: format!("port:{port}:{pid}"), port, addrs, proc, tty, session: None }
+            let in_your_folder = in_your_folder(&proc.cwd);
+            Port { key: format!("port:{port}:{pid}"), port, addrs, proc, tty, session: None, in_your_folder }
         })
         .collect()
 }

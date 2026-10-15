@@ -1,6 +1,6 @@
 [package]
 name = "whosup"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "A live terminal view of your coding-agent sessions (pi, Claude Code, Codex, …), their sub-agents and open terminals"
 license = "MIT"

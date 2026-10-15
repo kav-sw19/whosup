@@ -303,6 +303,7 @@ pub fn snapshot() -> Snapshot {
         },
         tty: tty.map(|n| format!("ttys{n:03}")),
         session: link.map(|(tool, key, title)| SessionLink { tool, key: Some(key.into()), title: title.into() }),
+        in_your_folder: !cwd.starts_with('/'),
     };
     let ports = vec![
         port(3000, &["*"], 51_207, "node next dev", "code/shop", 20.0, 412, Some(5), None),

@@ -40,8 +40,8 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
   --dir      pi agent dir (default: $PI_CODING_AGENT_DIR or ~/.pi/agent); Claude Code and Codex
              use $CLAUDE_CONFIG_DIR (~/.claude) and $CODEX_HOME (~/.codex)
   --recent   also list sessions touched in the last N hours (default 24; toggle with `a`)
-  --once     print a plain-text snapshot and exit (--all: include closed recent sessions)
-  --demo     show made-up sessions and terminals (for trying whosup out, or screenshots)
+  --once     print a plain-text snapshot (sessions, terminals, ports) and exit (--all: include closed recent sessions)
+  --demo     show made-up sessions, terminals and ports (for trying whosup out, or screenshots)
   --watch    no window: just send notifications (and remember where sessions ran)
   --install-service    run --watch at login (a launchd agent); --uninstall-service removes it
 
@@ -1073,6 +1073,27 @@ fn print_once(snap: &Snapshot, all: bool) {
             println!("    & {} (pid {})", one_line(&j.cmdline, 60), j.pid);
         }
     }
+    if !snap.ports.is_empty() {
+        println!();
+    }
+    for p in &snap.ports {
+        let from = match (&p.session, &p.tty) {
+            (Some(l), _) => format!("{} · {}", l.tool.label(), one_line(&l.title, 40)),
+            (None, Some(tty)) => tty.trim_start_matches("tty").to_string(),
+            (None, None) if p.detached() => "detached".into(),
+            (None, None) => "app".into(),
+        };
+        println!(
+            "{} :{:<5} {:<40} {:<7} pid {:<6} {:<30} {}",
+            if p.yours() { "▶" } else { "○" },
+            p.port,
+            one_line(&p.proc.cmdline, 40),
+            if p.exposed() { "network" } else { "local" },
+            p.proc.pid,
+            from,
+            if p.yours() { home_rel(&p.proc.cwd) } else { String::new() }
+        );
+    }
 }
 
 fn shell_quote(s: &str) -> String {
@@ -1735,8 +1756,12 @@ mod screenshots {
         app.move_sel(1);
         shoot(&mut app, 16);
         app.set_view(View::Ports);
-        shoot(&mut app, 8);
-        app.move_sel(1);
+        app.move_sel(2);
+        shoot(&mut app, 12);
+        flash(&mut app, "Opened http://localhost:5173");
+        shoot(&mut app, 12);
+        app.flash = None;
+        app.move_sel(-1);
         shoot(&mut app, 12);
         app.ask_close();
         shoot(&mut app, 12);

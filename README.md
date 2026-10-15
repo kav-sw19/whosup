@@ -19,15 +19,17 @@ it, every open terminal and every port your dev servers hold open. Press `↵` t
 
 </div>
 
-<img alt="whosup in action: sessions from pi, Claude Code and Codex with their sub-agents; a Claude session stops to ask for approval and jumps to the top; a search; jumping to a terminal tab; the Terminals tab; closing a detached dev server's port in the Ports tab; the Usage tab; the light theme" src="docs/whosup-demo.gif">
+<img alt="whosup in action: sessions from pi, Claude Code and Codex with their sub-agents; a Claude session stops to ask for approval and jumps to the top; a search; jumping to a terminal tab; the Terminals tab; the Ports tab: opening a dev server an agent started and closing a detached one; the Usage tab; the light theme" src="docs/whosup-demo.gif">
 
 <details>
-<summary>Still screenshots (dark and light)</summary>
+<summary>Still screenshots (dark, light and the Ports tab)</summary>
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/whosup-light.png">
   <img alt="whosup showing three live sessions (Codex waiting for you, Claude Code editing with two sub-agents, pi thinking) and two recently closed ones, with the selected session's details on the right" src="docs/whosup-dark.png">
 </picture>
+
+<img alt="whosup's Ports tab: dev servers started by agents and terminals, a detached one, and ports held by apps" src="docs/whosup-ports.png">
 
 </details>
 
@@ -80,7 +82,7 @@ sessions and ports you ask it to, after asking you to confirm.
   tokens, context size and cost (recorded by pi, estimated for Claude Code and Codex).
 - **Fast on large histories.** Transcripts are read incrementally, so multi-megabyte sessions cost
   almost nothing after the first read.
-- **Scriptable.** `whosup --once` prints a plain-text snapshot instead of opening the UI.
+- **Scriptable.** `whosup --once` prints a plain-text snapshot (sessions, terminals and ports) instead of opening the UI.
 
 ### The Usage tab
 
@@ -137,8 +139,8 @@ cargo install --path .
 
 ```sh
 whosup                      # live view, refreshes every second
-whosup --once               # print live sessions and open terminals, then exit
-whosup --demo               # try it with made-up sessions
+whosup --once               # print live sessions, open terminals and listening ports, then exit
+whosup --demo               # try it with made-up sessions, terminals and ports
 whosup --once --all         # also include sessions closed in the last 24 hours
 whosup --recent 72          # with `a`, show sessions closed in the last 72 hours
 whosup --dir ~/my-pi-dir    # use a different pi data folder
@@ -335,6 +337,8 @@ whosup runs on **macOS** (Apple Silicon and Intel).
 - opencode keeps its history in SQLite, so it (like the other process-only agents) shows no prompt,
   reply or status yet.
 - tmux panes show `tmux` as their app rather than the terminal window they're displayed in.
+- The Ports tab shows TCP ports only, and only your own processes. A server whose agent or terminal
+  has already closed can't be traced back to it, so it shows as *detached*.
 - Jumping to tabs in other terminal apps (WezTerm, kitty, Alacritty, Warp, VS Code) isn't supported yet.
 - Text you've typed into an agent but not sent isn't visible, so that session still shows
   *waiting for you*.
@@ -359,7 +363,7 @@ magick -delay 10 -loop 0 target/gif/*.png -layers Optimize docs/whosup-demo.gif
 Bump `version` in `Cargo.toml`, commit, then push a matching tag:
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 The Release workflow runs the tests, builds a universal macOS binary (`scripts/package.sh`), and
@@ -372,7 +376,8 @@ secret that can push to `kav-sw19/homebrew-tap`, it also updates the tap's `Form
 cargo build --release
 cargo test
 
-# render both tabs from your real data to stdout (and colour previews to /tmp/whosup-*.html)
+# render the UI from your real data to stdout (and colour previews to /tmp/whosup-*.html);
+# WHOSUP_VIEW=terminals|ports|usage picks a tab, WHOSUP_DEMO=1 uses the demo data
 cargo test --release render -- --ignored --nocapture
 ```
 
@@ -382,6 +387,7 @@ cargo test --release render -- --ignored --nocapture
 | `src/data.rs` | Session discovery, incremental transcript cache, process matching, sub-agents |
 | `src/providers.rs` | Agent detection, plus the Claude Code and Codex transcript parsers |
 | `src/terms.rs` | Terminal discovery: ttys, foreground commands, jobs, owning app |
+| `src/ports.rs` | Listening ports (`lsof`), who opened them, closing them |
 | `src/focus.rs` | Bringing a tty's tab to the front (Ghostty, iTerm2, Terminal, tmux) |
 | `src/ui.rs` | Rendering: palette, tabs, lists, details pane |
 
