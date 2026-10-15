@@ -83,8 +83,19 @@ fn app_installed(name: &str) -> bool {
         .any(|p| p.exists())
 }
 
-/// The terminal whosup runs in, from `$TERM_PROGRAM`; Terminal.app if it's not one we can drive.
+static TERMINAL_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Use this terminal app instead of the one whosup runs in (`terminal=` in the config).
+pub fn set_default_terminal(app: &str) {
+    let _ = TERMINAL_OVERRIDE.set(app.to_string());
+}
+
+/// The `terminal=` setting, else the terminal whosup runs in (from `$TERM_PROGRAM`), else
+/// Terminal.app.
 pub fn default_terminal() -> String {
+    if let Some(t) = TERMINAL_OVERRIDE.get() {
+        return t.clone();
+    }
     match std::env::var("TERM_PROGRAM").unwrap_or_default().as_str() {
         "ghostty" => "Ghostty".into(),
         "iTerm.app" => "iTerm".into(),

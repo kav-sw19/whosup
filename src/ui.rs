@@ -406,7 +406,8 @@ struct HeaderParts {
 
 fn header_parts(app: &App) -> HeaderParts {
     let p = pal();
-    let sessions = &app.snap.sessions;
+    // hidden agents (`hide=` in the config) don't count
+    let sessions: Vec<&Session> = app.snap.sessions.iter().filter(|s| !app.settings.hides(s.tool.label())).collect();
     let live = sessions.iter().filter(|s| s.live()).count();
     let working = sessions.iter().filter(|s| s.live() && s.t.is_busy()).count();
     let agents: usize = sessions.iter().map(|s| s.running_agents()).sum();
@@ -745,7 +746,12 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let head_r = |s: &'static str| {
         Cell::from(Line::from(Span::styled(s, Style::new().fg(pal().faint).add_modifier(Modifier::BOLD))).alignment(Alignment::Right))
     };
-    let live = app.snap.sessions.iter().filter(|s| s.live() || s.running_agents() > 0).count();
+    let live = app
+        .snap
+        .sessions
+        .iter()
+        .filter(|s| !app.settings.hides(s.tool.label()) && (s.live() || s.running_agents() > 0))
+        .count();
     let recent = app.visible_sessions().count() - live.min(app.visible_sessions().count());
     let count_text = if app.show_recent { format!("{live} live · {recent} recent") } else { format!("{live} live") };
     let count = Span::styled(count_text, Style::new().fg(pal().muted));

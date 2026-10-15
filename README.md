@@ -172,6 +172,22 @@ to waiting for you, or to an error. They appear under Script Editor, the app mac
 `osascript` notifications, so allow notifications for it in System Settings if none show up.
 Settings live in `~/.config/whosup/config`.
 
+## Configuration
+
+`~/.config/whosup/config` (or `$XDG_CONFIG_HOME/whosup/config`), one `key=value` per line:
+
+```ini
+theme=dark            # or light; also set with t
+notify=on             # also set with n
+refresh=1000          # milliseconds between refreshes (at least 250)
+hide=aider,opencode   # agents to leave out
+terminal=iTerm        # where to resume and start sessions (Ghostty, Terminal, iTerm, tmux)
+recent_hours=48       # how far back recent sessions go (--recent overrides it)
+price.opus=15,75,1.5,18.75   # USD per million tokens: input, output, cache read, cache write
+```
+
+When whosup saves `theme` or `notify`, it changes only those two lines.
+
 ## Sessions in editors
 
 whosup finds agents by their process, so it sees them wherever they run:

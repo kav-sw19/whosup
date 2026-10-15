@@ -141,10 +141,12 @@ impl App {
 
     fn visible_sessions(&self) -> impl Iterator<Item = (usize, &Session)> {
         let show_recent = self.show_recent;
+        let settings = &self.settings;
         self.snap
             .sessions
             .iter()
             .enumerate()
+            .filter(move |(_, s)| !settings.hides(s.tool.label()))
             .filter(move |(_, s)| show_recent || s.live() || s.running_agents() > 0)
     }
 
@@ -181,7 +183,9 @@ impl App {
             }
         }
         for (k, p) in self.snap.orphan_procs.iter().enumerate() {
-            rows.push((format!("p:{}", p.pid), RowRef::Orphan(k)));
+            if !self.settings.hides(p.tool.label()) {
+                rows.push((format!("p:{}", p.pid), RowRef::Orphan(k)));
+            }
         }
         self.finish_rows(rows);
     }
@@ -524,7 +528,7 @@ fn notify(title: &str, subtitle: &str, body: &str) {
 }
 
 fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
-    let data_tick = Duration::from_millis(1000);
+    let data_tick = Duration::from_millis(app.settings.refresh_ms);
     let frame = Duration::from_millis(80); // spinner cadence
     let mut last = Instant::now();
     loop {
@@ -603,7 +607,11 @@ fn run(term: &mut DefaultTerminal, mut app: App) -> std::io::Result<()> {
 fn main() -> std::io::Result<()> {
     let mut args = std::env::args().skip(1);
     let mut dir: Option<PathBuf> = std::env::var_os("PI_CODING_AGENT_DIR").map(PathBuf::from);
-    let mut hours: f64 = 24.0;
+    let config = settings::Settings::load();
+    if let Some(t) = &config.terminal {
+        resume::set_default_terminal(t);
+    }
+    let mut hours: f64 = config.recent_hours;
     let mut once = false;
     let mut all = false;
     let mut demo = false;
