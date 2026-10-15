@@ -14,8 +14,9 @@
 
 **`top` for your coding agents.**
 
-See every pi, Claude Code, Codex, opencode, Gemini CLI and aider session you have running, what each one is doing right now, the sub-agents working inside
-it, every open terminal and every port your dev servers hold open. Press `↵` to jump straight to its tab.
+See every pi, Claude Code, Codex, opencode, Gemini CLI and aider session you have running, what
+each one is doing right now and the sub-agents working inside it, plus every open terminal and every
+port your dev servers hold open. Press `↵` to jump straight to its tab.
 
 </div>
 
@@ -48,11 +49,11 @@ sessions and ports you ask it to, after asking you to confirm.
 
 ## Features
 
-- **Every agent in one list, wherever it runs.** pi, Claude Code and Codex sessions are read from
-  their transcripts, whether they run in a terminal app, in an editor's integrated terminal (VS Code,
-  Cursor, Zed, JetBrains, Atom, …) or inside an editor extension (Claude Code for VS Code, Codex).
-  Other agent CLIs (opencode, gemini, aider, amp, goose, crush, qwen, cursor-agent, copilot, droid)
-  are found by their process.
+- **Every agent in one list, wherever it runs.** pi, Claude Code, Codex, opencode, Gemini CLI and
+  aider sessions are read from their own records, whether they run in a terminal app, in an editor's
+  integrated terminal (VS Code, Cursor, Zed, JetBrains, Atom, …) or inside an editor extension
+  (Claude Code for VS Code, Codex). Other agent CLIs (amp, goose, crush, qwen, cursor-agent,
+  copilot, droid) are found by their process. See [Supported agents](#supported-agents).
 - **Live status.** Each session shows *thinking*, the tool it's running, *waiting for you*,
   *interrupted* or *error*, updated every second.
 - **Sub-agents nested under their session:** Claude Code Task-tool agents, Codex multi-agent
@@ -60,9 +61,10 @@ sessions and ports you ask it to, after asking you to confirm.
 - **Resume closed sessions.** `↵` on a closed session runs the right resume command for its agent
   (`pi --session …`, `claude --resume …`, `codex resume …`) in a new tab of the app it last ran
   in, or your default terminal.
-- **See what needs you.** Sessions waiting for your reply (or stopped by an error) go to the top,
-  in bold, with a count in the header. Turn on **notifications** with `n` to hear when one finishes.
-- **Jump straight to it.** Press `↵` on a session or terminal and its tab comes to the front, in
+- **See what needs you.** Sessions waiting for your reply, asking to approve a tool call, stopped
+  by an error or looking stuck go to the top, in bold, with a count in the header. Turn on
+  **notifications** with `n` to hear when one turns. See [Needs you and notifications](#needs-you-and-notifications).
+- **Jump straight to it.** Press `↵` on a session, terminal or port and its tab comes to the front, in
   Ghostty, iTerm2, Terminal or tmux; for sessions in an editor, the editor comes to the front. The
   **IN** column shows where each one lives, and the details pane says what `↵` will do.
 - **Light and dark themes.** Press `t` to switch; whosup remembers your choice.
@@ -76,15 +78,19 @@ sessions and ports you ask it to, after asking you to confirm.
 - **Files changed**, per session, from its edit tool calls, with a warning when two live sessions
   have edited the same file in the last hour.
 - **A details pane** with the last prompt and reply (lightly formatted Markdown), turns, tool calls,
-  tokens, context size and cost (recorded by pi, estimated for Claude Code and Codex).
+  tokens, context size and cost (recorded by pi, opencode and aider; estimated for the others,
+  shown with `≈`).
 - **Fast on large histories.** Transcripts are read incrementally, so multi-megabyte sessions cost
   almost nothing after the first read.
-- **Scriptable.** `whosup --once` prints a plain-text snapshot (sessions, terminals and ports) instead of opening the UI.
+- **Read the whole conversation** with `v`, copy bits of it with `y`, or export it to Markdown with `e`.
+- **Start a new session** with `N` in the selected session's folder.
+- **Scriptable.** `whosup --once` prints a plain-text snapshot (sessions, terminals and ports)
+  instead of opening the UI.
 
 ### The Usage tab
 
-Spend and tokens for today, the last 7 days and the last 7, 30 or 90 days (`a` switches), with a
-daily chart and breakdowns by agent, model and project. pi's recorded cost is used as is; Claude
+Spend and tokens for today, the last 7 days and the whole range (30 days by default; `a` switches
+between 7, 30 and 90), with a daily chart and breakdowns by agent, model and project. pi's recorded cost is used as is; Claude
 Code and Codex replies are priced as they happen (shown with `≈`); opencode, Gemini CLI and aider
 sessions count on the day of their last activity.
 
@@ -94,9 +100,7 @@ sessions count on the day of their last activity.
 
 ### The Ports tab
 
-<img alt="whosup's Ports tab: eight listening ports; a Next.js server started from a VS Code terminal and open to the network, a detached Astro server, a Vite server started by a pi session and two by a Claude Code session, then ports held by apps" src="docs/whosup-ports.png">
-
-`↵` goes to the terminal the server runs in, `s` shows the agent session that started it, `o` opens
+(Screenshot in the fold-out at the top.) `↵` goes to the terminal the server runs in, `s` shows the agent session that started it, `o` opens
 `http://localhost:<port>`, and `x` closes the port: `k` ends the process holding it (SIGTERM) and
 `9` force-kills it. Ports started from your terminals and agents, or running in one of your folders,
 come first; ports held by apps (Spotify, Postgres.app, …) are listed under *other apps*. Only your
@@ -150,11 +154,11 @@ whosup --interrupt ttys003  # press Esc in that tty's tab
 
 | Key | Action |
 | --- | --- |
-| `/` | Search: every word must match the title, folder, agent, model, first prompt or a sub-agent's task (`↵` keeps it, `esc` clears it) |
+| `/` | Search: every word must match. Sessions: the title, folder, agent, model, first prompt or a sub-agent's task. Terminals and Ports: the command, folder, tty, port or session (`↵` keeps it, `esc` clears it) |
 | `tab` · `1` · `2` · `3` · `4` | Switch between Sessions, Terminals, Ports and Usage |
 | `↑` `↓` · `j` `k` | Move the selection (`PgUp` / `PgDn`, `g` / `G` jump) |
 | `←` `→` · `h` `l` | Collapse or expand a session's sub-agents (closed sessions start collapsed) |
-| `↵` | Live session or terminal: bring its tab to the front. Closed session: resume it |
+| `↵` | Live session, terminal or port: bring its tab to the front. Closed session: resume it |
 | `s` | On a terminal: show the agent session running in it. On a port: show the session that started it |
 | `o` | On a port: open `http://localhost:<port>` in the browser |
 | `J` `K` | Scroll the details pane |
@@ -164,7 +168,7 @@ whosup --interrupt ttys003  # press Esc in that tty's tab
 | `x` | Stop a live session: then `i` interrupts its turn (presses Esc in its Ghostty or iTerm2 tab) or `k` ends it (SIGTERM) |
 | `x` (Ports) | Close the selected port: then `k` ends the process holding it (SIGTERM) or `9` force-kills it |
 | `N` | Start a new session in the selected session's folder: `1` pi, `2` claude, `3` codex, `4` opencode, `5` gemini, `6` aider (those on your PATH) |
-| `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history |
+| `a` | History: live only → recent (24h, `recent_hours=`) → 7 days → all history. On the Usage tab: 7, 30 or 90 days |
 | `f` | Hide finished sub-agents |
 | `p` | Group sessions by project (their git repository, else their folder) |
 | `n` | Turn notifications on or off (remembered) |
@@ -178,6 +182,9 @@ whosup --interrupt ttys003  # press Esc in that tty's tab
 | --- | --- |
 | spinner + **thinking** | Your message or a tool result was sent; the model hasn't replied yet |
 | spinner + **bash**, **Edit**, … | The model is waiting for that tool to finish |
+| ◆ **approve Bash?** | The agent is waiting for you to approve a tool call |
+| ▲ **stuck? bash 14m**, **looping? Read ×4** | One step has run with nothing written for a while, or the same call keeps repeating |
+| **new** | The agent has started but nothing has been sent yet |
 | **waiting for you** | The agent finished its reply and is at the prompt |
 | **interrupted** | The last reply was cut off (for example, you pressed Esc) |
 | **error** | The last reply ended in an error |
@@ -308,14 +315,13 @@ or it was written to in the last 10 minutes (if working) or 30 minutes (if idle)
 
 ## Jumping to a tab
 
-`↵` finds the terminal tab a session runs in and brings it to the front:
+`↵` finds the terminal tab a session (or a port's server) runs in and brings it to the front:
 
 | Terminal | How |
 | --- | --- |
 | **Ghostty** | Its AppleScript doesn't expose ttys, so whosup briefly reports a unique working directory on the session's tty (OSC 7), asks Ghostty which terminal has it, restores the real directory, and focuses that terminal. |
 | **iTerm2**, **Terminal** | Selected directly by tty through AppleScript. |
 | **tmux** | Selects the pane and its window, then brings up the terminal its client is attached to. |
-
 | **Editors** (VS Code, Cursor, Zed, JetBrains, Atom, …) | Editors don't let other apps pick one of their terminal panels, so the editor's window comes to the front. Agents running in an editor extension (no terminal) do the same. |
 | **Codex desktop app** | Codex.app comes to the front. |
 
@@ -331,8 +337,10 @@ whosup runs on **macOS** (Apple Silicon and Intel).
 - CPU is measured between refreshes, so it reads 0% in `--once` and for the live view's first second.
 - When several sessions of the same agent are resumed in the same folder, the process-to-session
   match can pick the wrong one.
-- opencode keeps its history in SQLite, so it (like the other process-only agents) shows no prompt,
-  reply or status yet.
+- Gemini CLI and aider support is checked against sample files only, and Codex multi-agent support
+  hasn't been checked against a real multi-agent run yet. Bug reports are welcome.
+- Process-only agents (amp, goose, crush, qwen, cursor-agent, copilot, droid) show no prompt, reply
+  or status.
 - tmux panes show `tmux` as their app rather than the terminal window they're displayed in.
 - The Ports tab shows TCP ports only, and only your own processes. A server whose agent or terminal
   has already closed can't be traced back to it, so it shows as *detached*.
@@ -360,7 +368,7 @@ magick -delay 10 -loop 0 target/gif/*.png -layers Optimize docs/whosup-demo.gif
 Bump `version` in `Cargo.toml`, commit, then push a matching tag:
 
 ```sh
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0   # the version you just set
 ```
 
 The Release workflow runs the tests, builds a universal macOS binary (`scripts/package.sh`), and
@@ -383,10 +391,17 @@ cargo test --release render -- --ignored --nocapture
 | `src/main.rs` | Arguments, app state, keys and the refresh loop |
 | `src/data.rs` | Session discovery, incremental transcript cache, process matching, sub-agents |
 | `src/providers.rs` | Agent detection, plus the Claude Code and Codex transcript parsers |
+| `src/opencode.rs` | opencode sessions, read from its SQLite database |
+| `src/more_agents.rs` | Gemini CLI and aider sessions |
+| `src/convo.rs` · `src/export.rs` | The conversation view (`v`), copying (`y`) and Markdown export (`e`) |
+| `src/resume.rs` | Resuming closed sessions and starting new ones |
+| `src/usage.rs` · `src/cost.rs` · `src/models.rs` | The Usage tab, cost estimates and model prices |
+| `src/settings.rs` · `src/watch.rs` | The config file, and `--watch` notifications |
+| `src/demo.rs` | The made-up data for `--demo` and the README images |
 | `src/terms.rs` | Terminal discovery: ttys, foreground commands, jobs, owning app |
 | `src/ports.rs` | Listening ports (`lsof`), who opened them, closing them |
 | `src/focus.rs` | Bringing a tty's tab to the front (Ghostty, iTerm2, Terminal, tmux) |
-| `src/ui.rs` | Rendering: palette, tabs, lists, details pane |
+| `src/ui.rs` | Rendering: palette, tabs, lists, details pane, Usage chart |
 
 Adding an agent with a JSONL transcript means adding it to `Tool`, writing an `ingest_*` parser in
 `providers.rs` and listing its transcript folder in `Scanner::transcript_files`.

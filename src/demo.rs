@@ -1,4 +1,4 @@
-//! Made-up sessions, sub-agents and terminals for `whosup --demo` and the README screenshots.
+//! Made-up sessions, sub-agents, terminals and ports for `whosup --demo` and the README images.
 //! Times are relative to now, so the demo always looks current.
 
 use crate::data::{now_ms, Agent, AgentSource, ProcInfo, Session, Snapshot, Transcript};
