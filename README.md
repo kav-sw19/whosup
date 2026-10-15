@@ -12,8 +12,7 @@
 
 **`top` for your coding agents.**
 
-See every pi, Claude Code and Codex session you have running (in a terminal, an editor's
-terminal or an editor extension), what each one is doing right now, the sub-agents working inside
+See every pi, Claude Code and Codex session you have running, what each one is doing right now, the sub-agents working inside
 it, and every open terminal. Press `↵` to jump straight to its tab.
 
 </div>
@@ -22,8 +21,6 @@ it, and every open terminal. Press `↵` to jump straight to its tab.
   <source media="(prefers-color-scheme: light)" srcset="docs/whosup-light.png">
   <img alt="whosup showing three live sessions (Codex waiting for you, Claude Code editing with two sub-agents, pi thinking) and two recently closed ones, with the selected session's details on the right" src="docs/whosup-dark.png">
 </picture>
-
-<sub>Screenshots of the real interface running <code>whosup --demo</code>, which shows made-up sessions.</sub>
 
 ## Why
 
