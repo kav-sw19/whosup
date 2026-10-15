@@ -81,7 +81,7 @@ sessions count on the day of their last activity.
 
 ## Install
 
-**Homebrew** (once the first release and the `kav-sw19/homebrew-tap` tap are published):
+**Homebrew:**
 
 ```sh
 brew install kav-sw19/tap/whosup
