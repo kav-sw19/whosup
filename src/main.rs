@@ -1678,6 +1678,95 @@ mod screenshots {
         std::fs::write(format!("docs/{file}"), svg(t.backend().buffer(), &bg, &fg, "whosup", chrome)).unwrap();
     }
 
+    /// A short video of the Ports tab (for posting): frames to target/ports-video/*.svg, each with
+    /// an on-screen badge naming the key just pressed. `scripts/ports-video.sh` turns them into an MP4.
+    #[test]
+    #[ignore]
+    fn ports_video() {
+        unsafe { std::env::set_var("HOME", "/Users/you") };
+        let out = PathBuf::from("target/ports-video");
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        ui::set_light(false);
+        let mut app = App::new_demo(Scanner::new(PathBuf::from("/nonexistent"), 24 * 3_600_000));
+        app.settings.light = false;
+        ui::set_light(false);
+        app.settings.notify = true;
+        let (w, h) = (140u16, 32u16);
+        let mut n = 0usize;
+        // `frames` renders 100ms apart (so spinners turn), with an optional key badge
+        let mut shoot = |app: &mut App, frames: usize, badge: Option<(&str, &str)>| {
+            for _ in 0..frames {
+                let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+                t.draw(|f| ui::draw(f, app)).unwrap();
+                let p = ui::pal();
+                let bg = hex(p.bg.unwrap_or(Color::Rgb(26, 27, 38)), "#1a1b26");
+                let fg = hex(p.fg, "#c0caf5");
+                let mut doc = svg(t.backend().buffer(), &bg, &fg, "whosup", "#15161f");
+                if let Some((key, label)) = badge {
+                    let tw = w as f32 * CW + PAD * 2.0;
+                    let th = h as f32 * CH + PAD * 2.0 + BAR;
+                    let kw = 16.0 + key.chars().count() as f32 * 13.0;
+                    let bw = kw + 30.0 + label.chars().count() as f32 * 10.6;
+                    let (bx, by) = (tw - bw - 34.0, th - 96.0);
+                    let pill = format!(
+                        "<g font-family='-apple-system,Helvetica,sans-serif'>\
+                         <rect x='{bx}' y='{by}' width='{bw}' height='46' rx='12' fill='#0b0c12' fill-opacity='0.92' stroke='#7aa2f7' stroke-opacity='0.55'/>\
+                         <rect x='{kx}' y='{ky}' width='{kw}' height='30' rx='7' fill='#7aa2f7'/>\
+                         <text x='{kt}' y='{ty}' text-anchor='middle' font-size='19' font-weight='700' fill='#0b0c12'>{key}</text>\
+                         <text x='{lx}' y='{ty}' font-size='19' fill='#e6e9f5'>{label}</text></g></svg>",
+                        kx = bx + 8.0,
+                        ky = by + 8.0,
+                        kt = bx + 8.0 + kw / 2.0,
+                        ty = by + 30.0,
+                        lx = bx + 8.0 + kw + 14.0,
+                        key = esc(key),
+                        label = esc(label),
+                    );
+                    doc = doc.trim_end().trim_end_matches("</svg>").to_string() + &pill;
+                }
+                std::fs::write(out.join(format!("{n:04}.svg")), doc).unwrap();
+                n += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        };
+        let flash = |app: &mut App, text: &str| app.flash = Some(Flash { text: text.into(), error: false, at: Instant::now() });
+
+        // 1. agents at work in Sessions
+        app.cycle_history();
+        app.rebuild_rows();
+        shoot(&mut app, 18, None);
+        // 2. the Ports tab: what's listening, and who started it
+        app.set_view(View::Ports);
+        shoot(&mut app, 30, Some(("3", "Ports")));
+        // 3. a dev server a pi session started
+        app.move_sel(2);
+        shoot(&mut app, 10, Some(("↓", "move")));
+        shoot(&mut app, 22, None);
+        flash(&mut app, "Opened http://localhost:5173");
+        shoot(&mut app, 18, Some(("o", "open in browser")));
+        app.flash = None;
+        // 4. the session behind it
+        app.show_session();
+        shoot(&mut app, 22, Some(("s", "show its session")));
+        app.set_view(View::Ports);
+        shoot(&mut app, 8, Some(("3", "back to Ports")));
+        // 5. a dev server left running after its terminal closed
+        app.move_sel(-1);
+        shoot(&mut app, 10, Some(("↑", "move")));
+        shoot(&mut app, 26, None);
+        // 6. close it
+        app.ask_close();
+        shoot(&mut app, 20, Some(("x", "close port")));
+        app.closing = None;
+        flash(&mut app, "Closing port 4321 (node)…");
+        shoot(&mut app, 8, Some(("k", "end it")));
+        app.snap.ports.retain(|p| p.port != 4321);
+        app.rebuild_rows();
+        flash(&mut app, "Closed port 4321 (ended pid 50977)");
+        shoot(&mut app, 30, None);
+    }
+
     /// The README's demo GIF, frame by frame: `cargo test --release demo_gif -- --ignored`
     /// writes target/gif/NNNN.svg plus target/gif/delays.txt (hundredths of a second each).
     #[test]
