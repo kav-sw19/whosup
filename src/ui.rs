@@ -462,7 +462,7 @@ fn header_parts(app: &App) -> HeaderParts {
         let cpu: f32 = terms.iter().map(|t| t.cpu).sum();
         let mem: u64 = terms.iter().map(|t| t.mem).sum();
         vec![
-            Span::styled(format!("{cpu:.0}%"), Style::new().fg(p.fg).bold()),
+            Span::styled(pct(cpu), Style::new().fg(p.fg).bold()),
             Span::styled(" cpu   ", Style::new().fg(p.muted)),
             Span::styled(mem_str(mem), Style::new().fg(p.fg).bold()),
             Span::styled(" memory", Style::new().fg(p.muted)),
@@ -998,7 +998,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 Some(p) => vec![
                     format!("pid {}", p.pid),
                     format!("up {}", ago(Some(p.start_ms))),
-                    format!("{:.0}% cpu", p.cpu),
+                    format!("{} cpu", pct(p.cpu)),
                     format!("{} MB", p.mem / 1_048_576),
                 ],
                 None if s.app_live => vec![
@@ -1025,8 +1025,11 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 ("tokens", tokens(s.t.tokens)),
                 ("context", tokens(s.t.context_tokens)),
             ]));
-            if s.tool != Tool::Pi && s.agents.is_empty() {
+            if s.tool != Tool::Pi {
                 // only pi records cost in its transcript
+                if !s.agents.is_empty() {
+                    lines.push(stats(&[("agents running", format!("{}/{}", s.running_agents(), s.agents.len()))]));
+                }
             } else if s.agents.is_empty() {
                 lines.push(stats(&[("spent", money(s.t.cost))]));
             } else {
@@ -1103,7 +1106,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
             ]));
             lines.push(meta(vec![format!("pid {}", p.pid), home_rel(&p.cwd), format!("up {}", ago(Some(p.start_ms)))]));
             lines.push(Line::default());
-            lines.push(stats(&[("cpu", format!("{:.0}%", p.cpu)), ("memory", mem_str(p.mem))]));
+            lines.push(stats(&[("cpu", pct(p.cpu)), ("memory", mem_str(p.mem))]));
             lines.push(Line::default());
             let note = if matches!(p.tool, Tool::Other(_)) {
                 format!("whosup can't read {}'s transcripts yet, so only the process is shown.", p.tool.label())
@@ -1127,7 +1130,7 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 format!("running {}", ago(Some(p.start_ms))),
             ]));
             lines.push(Line::default());
-            lines.push(stats(&[("cpu", format!("{:.0}%", p.cpu)), ("memory", mem_str(p.mem))]));
+            lines.push(stats(&[("cpu", pct(p.cpu)), ("memory", mem_str(p.mem))]));
             lines.push(Line::default());
             lines.push(Line::from(Span::styled(home_rel(&p.cwd), Style::new().fg(pal().faint))));
         }
@@ -1181,6 +1184,11 @@ fn draw_detail(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 // ── terminals ─────────────────────────────────────────────────────────────────
+/// CPU as a whole percentage; never "-0%" (an empty float sum is negative zero).
+fn pct(c: f32) -> String {
+    format!("{:.0}%", c.max(0.0))
+}
+
 pub fn mem_str(b: u64) -> String {
     let mb = b as f64 / 1_048_576.0;
     if mb >= 1024.0 {
@@ -1256,7 +1264,7 @@ fn draw_terminal_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from(Span::styled(st.glyph, Style::new().fg(st.color).bold())),
                     Cell::from(Line::from(vec![
                         Span::styled(t.short_tty(), Style::new().fg(pal().soft).bold()),
-                        Span::styled(format!(" {}", t.app), Style::new().fg(pal().muted)),
+                        Span::styled(format!(" {}", short_app(&t.app)), Style::new().fg(pal().muted)),
                     ])),
                     Cell::from(Line::from({
                         let mut v = what.spans;
@@ -1265,7 +1273,7 @@ fn draw_terminal_list(f: &mut Frame, app: &mut App, area: Rect) {
                     })),
                     Cell::from(Span::styled(short_path(&t.cwd(), where_w), Style::new().fg(pal().muted))),
                     right(time, Style::new().fg(pal().muted)),
-                    right(format!("{cpu:.0}%"), Style::new().fg(if cpu >= 5.0 { pal().amber } else { pal().muted })),
+                    right(pct(cpu), Style::new().fg(if cpu >= 5.0 { pal().amber } else { pal().muted })),
                     right(mem_str(t.mem), Style::new().fg(pal().muted)),
                 ]));
             }
@@ -1278,7 +1286,7 @@ fn draw_terminal_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from(Span::styled(one_line(&p.cmdline, 80), Style::new().fg(pal().soft))),
                     Cell::from(Span::styled(short_path(&p.cwd, where_w), Style::new().fg(pal().faint))),
                     right(ago(Some(p.start_ms)), Style::new().fg(pal().muted)),
-                    right(format!("{:.0}%", p.cpu), Style::new().fg(pal().muted)),
+                    right(pct(p.cpu), Style::new().fg(pal().muted)),
                     right(mem_str(p.mem), Style::new().fg(pal().muted)),
                 ]));
             }
@@ -1351,7 +1359,7 @@ fn terminal_detail(t: &Terminal, lines: &mut Vec<Line<'static>>) {
     ]));
     lines.push(Line::default());
     lines.push(stats(&[
-        ("cpu", format!("{:.0}%", t.cpu)),
+        ("cpu", pct(t.cpu)),
         ("memory", mem_str(t.mem)),
         (if t.procs == 1 { "process" } else { "processes" }, t.procs.to_string()),
         (if t.jobs.len() == 1 { "job" } else { "jobs" }, t.jobs.len().to_string()),

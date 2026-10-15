@@ -18,25 +18,12 @@ it, and every open terminal. Press `↵` to jump straight to its tab.
 
 </div>
 
-```
-╭ Sessions 3 live · 1 recent ──────────────────────────────────────────╮ ╭ Session claude ──────────────────────────╮
-│                                                                      │ │                                          │
-│      SESSION                         IN       STATUS            TIME │ │ Add rate limiting to the public API      │
-│                                                                      │ │  ↵  go to s002 in Ghostty                │
-│▌⠹  ▾ claude Add rate limiting to th  s002     Edit               now │ │                                          │
-│      ├─ ⠹ a3f91c0  Find every route           Grep                8s │ │ ⠹ Edit  ·  in s002  ·  pid 48211  ·  12m │
-│      └─ ✓ b72d4e1  Check Redis clie           done            1m 02s │ │ ~/code/api  ·  claude-opus-4-8           │
-│ ⠹  ▾ pi     Migrate auth to OAuth 2  VS Code  thinking           12s │ │                                          │
-│      └─ ⠹ scout-1  Map the session            read               31s │ │ 23 turns    31 tools    1.2M tokens      │
-│ ●    codex  Fix flaky checkout test  Codex    waiting for you     4m │ │                                          │
-│      recently closed                                                 │ │ LAST PROMPT                              │
-│ ○    pi     Write release notes                closed         1h 20m │ │ add per-key rate limits to /v1, 429 with │
-╰──────────────────────────────────────────────────────────────────────╯ ╰──────────────────────────────────────────╯
-  ↵ go to its tab  ·  tab terminals  ·  ↑↓ move  ·  ←→ fold  ·  a recent  ·  t theme  ·  q quit
-```
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/whosup-light.png">
+  <img alt="whosup showing three live sessions (Codex waiting for you, Claude Code editing with two sub-agents, pi thinking) and two recently closed ones, with the selected session's details on the right" src="docs/whosup-dark.png">
+</picture>
 
-<sub>Illustrative preview of the main view. In the terminal it's in colour, with the WHOSUP wordmark
-in the header, a light and a dark theme (<code>t</code>), and spinners on whatever is working.</sub>
+<sub>Screenshots of the real interface running <code>whosup --demo</code>, which shows made-up sessions.</sub>
 
 ## Why
 
@@ -80,6 +67,10 @@ an agent, sends anything over the network, or changes a file.
   almost nothing after the first read.
 - **Scriptable.** `whosup --once` prints a plain-text snapshot instead of opening the UI.
 
+### The Terminals tab
+
+<img alt="whosup's Terminals tab: five terminals, two running agents, with their CPU and memory" src="docs/whosup-terminals.png">
+
 ## Install
 
 Requires Rust 1.85 or newer.
@@ -100,6 +91,7 @@ cargo install --path .
 ```sh
 whosup                      # live view, refreshes every second
 whosup --once               # print live sessions and open terminals, then exit
+whosup --demo               # try it with made-up sessions
 whosup --once --all         # also include sessions closed in the last 24 hours
 whosup --recent 72          # with `a`, show sessions closed in the last 72 hours
 whosup --dir ~/my-pi-dir    # use a different pi data folder
@@ -240,6 +232,16 @@ tested there. Windows is not supported.
 - Jumping to tabs in other terminal apps (WezTerm, kitty, Alacritty, Warp, VS Code) isn't supported yet.
 - Text you've typed into an agent but not sent isn't visible, so that session still shows
   *waiting for you*.
+
+## Screenshots
+
+The README images are the real UI rendered from `--demo` data, cell by cell:
+
+```sh
+cargo test --release screenshots -- --ignored      # writes docs/*.svg
+swiftc -O docs/svg2png.swift -o /tmp/svg2png
+for f in docs/*.svg; do /tmp/svg2png "$f" "${f%.svg}.png" 2; done && rm docs/*.svg
+```
 
 ## Development
 

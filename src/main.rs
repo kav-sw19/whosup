@@ -1,4 +1,5 @@
 mod data;
+mod demo;
 mod resume;
 mod settings;
 mod focus;
@@ -29,6 +30,7 @@ USAGE: whosup [--dir <pi agent dir>] [--recent <hours>] [--once [--all]] [--focu
              use $CLAUDE_CONFIG_DIR (~/.claude) and $CODEX_HOME (~/.codex)
   --recent   also list sessions touched in the last N hours (default 24; toggle with `a`)
   --once     print a plain-text snapshot and exit (--all: include closed recent sessions)
+  --demo     show made-up sessions and terminals (for trying whosup out, or screenshots)
 
 KEYS: tab/1/2 sessions·terminals · ↑/↓ j/k move · ↵ go to the session's terminal tab
       ←/→ h/l fold · s (terminals) show its session · J/K scroll details · a all-recent/live-only
@@ -97,12 +99,20 @@ pub struct App {
     pub hosts: settings::Hosts,
     /// each live session's phase at the last refresh (None until the first refresh)
     phases: Option<std::collections::HashMap<String, Phase>>,
+    /// show made-up data (`--demo`) instead of scanning
+    demo: bool,
 }
 
 impl App {
     fn new(scanner: Scanner) -> Self {
+        let mut a = Self::new_inner(scanner, false);
+        a.refresh();
+        a
+    }
+
+    fn new_inner(scanner: Scanner, demo: bool) -> Self {
         let (focus_tx, focus_rx) = mpsc::channel();
-        let mut a = Self {
+        let a = Self {
             view: View::Sessions,
             flash: None,
             focus_tx,
@@ -121,9 +131,9 @@ impl App {
             settings: settings::Settings::load(),
             hosts: settings::Hosts::load(),
             phases: None,
+            demo,
         };
         ui::set_light(a.settings.light);
-        a.refresh();
         a
     }
 
@@ -196,7 +206,18 @@ impl App {
         self.selected_key = self.state.selected().map(|i| self.rows[i].0.clone());
     }
 
+    fn new_demo(scanner: Scanner) -> Self {
+        let mut a = Self::new_inner(scanner, true);
+        a.refresh();
+        a
+    }
+
     fn refresh(&mut self) {
+        if self.demo {
+            self.snap = demo::snapshot();
+            self.rebuild_rows();
+            return;
+        }
         self.snap = self.scanner.scan();
         self.remember_hosts();
         self.notify_changes();
@@ -583,12 +604,14 @@ fn main() -> std::io::Result<()> {
     let mut hours: f64 = 24.0;
     let mut once = false;
     let mut all = false;
+    let mut demo = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--dir" => dir = args.next().map(PathBuf::from),
             "--recent" => hours = args.next().and_then(|h| h.parse().ok()).unwrap_or(hours),
             "--once" => once = true,
             "--all" => all = true,
+            "--demo" => demo = true,
             // resume the first closed session whose title or transcript path contains the text
             "--resume" => {
                 let query = args.next().unwrap_or_default().to_lowercase();
@@ -647,10 +670,10 @@ fn main() -> std::io::Result<()> {
     let mut scanner = Scanner::new(dir, (hours * 3_600_000.0) as i64);
 
     if once {
-        print_once(&scanner.scan(), all);
+        print_once(&if demo { demo::snapshot() } else { scanner.scan() }, all);
         return Ok(());
     }
-    let app = App::new(scanner);
+    let app = if demo { App::new_demo(scanner) } else { App::new(scanner) };
     let mut term = ratatui::init();
     let res = run(&mut term, app);
     ratatui::restore();
@@ -711,5 +734,160 @@ mod render_test {
         }
         html.push_str("</pre></body></html>");
         std::fs::write(format!("/tmp/whosup-{w}x{h}.html"), html).unwrap();
+    }
+}
+
+/// README screenshots: the real UI on `--demo` data, drawn to SVG cell by cell.
+/// `cargo test --release screenshots -- --ignored` writes docs/*.svg.
+#[cfg(test)]
+mod screenshots {
+    use super::*;
+    use ratatui::{backend::TestBackend, buffer::Buffer, style::Color, Terminal};
+
+    const CW: f32 = 8.8; // cell width
+    const CH: f32 = 19.0; // cell height
+    const PAD: f32 = 18.0;
+    const BAR: f32 = 34.0; // window title bar
+
+    fn hex(c: Color, fallback: &str) -> String {
+        match c {
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            _ => fallback.to_string(),
+        }
+    }
+
+    fn esc(s: &str) -> String {
+        s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    }
+
+    fn svg(buf: &Buffer, bg: &str, fg: &str, title: &str, chrome: &str) -> String {
+        let (w, h) = (buf.area.width as f32 * CW, buf.area.height as f32 * CH);
+        let (tw, th) = (w + PAD * 2.0, h + PAD * 2.0 + BAR);
+        let mut o = String::new();
+        o += &format!(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='{tw}' height='{th}' viewBox='0 0 {tw} {th}'>\n\
+             <rect width='{tw}' height='{th}' rx='12' fill='{bg}'/>\n\
+             <rect width='{tw}' height='{BAR}' rx='12' fill='{chrome}'/><rect y='{y}' width='{tw}' height='12' fill='{chrome}'/>\n\
+             <circle cx='22' cy='17' r='6' fill='#ff5f57'/><circle cx='42' cy='17' r='6' fill='#febc2e'/><circle cx='62' cy='17' r='6' fill='#28c840'/>\n\
+             <text x='{cx}' y='22' text-anchor='middle' font-family='-apple-system,Segoe UI,sans-serif' font-size='12.5' fill='{fg}' opacity='0.6'>{title}</text>\n\
+             <g transform='translate({PAD},{oy})' font-family='Menlo,SF Mono,Monaco,Consolas,monospace' font-size='14.2'>\n",
+            y = BAR - 12.0,
+            cx = tw / 2.0,
+            oy = BAR + PAD
+        );
+        for y in 0..buf.area.height {
+            let top = y as f32 * CH;
+            // backgrounds, merged into runs
+            let mut x = 0;
+            while x < buf.area.width {
+                let c = &buf[(x, y)];
+                if let Color::Rgb(..) = c.bg {
+                    let start = x;
+                    while x < buf.area.width && buf[(x, y)].bg == c.bg {
+                        x += 1;
+                    }
+                    o += &format!(
+                        "<rect x='{:.1}' y='{:.1}' width='{:.1}' height='{CH}' fill='{}'/>\n",
+                        start as f32 * CW,
+                        top,
+                        (x - start) as f32 * CW + 0.4,
+                        hex(c.bg, bg)
+                    );
+                } else {
+                    x += 1;
+                }
+            }
+            // glyphs: blocks and box lines as shapes, everything else as positioned text
+            let mut run: Option<(String, bool, Vec<f32>, String)> = None; // fg, bold, xs, text
+            // one <text> per character: every renderer honours a single x, not all honour x lists
+            let flush = |run: &mut Option<(String, bool, Vec<f32>, String)>, o: &mut String| {
+                if let Some((f, b, xs, t)) = run.take() {
+                    *o += &format!("<g fill='{f}'{}>", if b { " font-weight='bold'" } else { "" });
+                    for (x, ch) in xs.iter().zip(t.chars()) {
+                        *o += &format!("<text x='{x:.1}' y='{:.1}'>{}</text>", top + CH * 0.72, esc(&ch.to_string()));
+                    }
+                    *o += "</g>\n";
+                }
+            };
+            for x in 0..buf.area.width {
+                let c = &buf[(x, y)];
+                let sym = c.symbol();
+                let f = hex(c.fg, fg);
+                let (l, m, r) = (x as f32 * CW, x as f32 * CW + CW / 2.0, (x + 1) as f32 * CW);
+                let (t, mid, b) = (top, top + CH / 2.0, top + CH);
+                let line = |d: String| format!("<path d='{d}' stroke='{f}' stroke-width='1.2' fill='none'/>\n");
+                let shape = match sym {
+                    " " | "" => Some(String::new()),
+                    "█" => Some(format!("<rect x='{l:.1}' y='{t:.1}' width='{:.1}' height='{:.1}' fill='{f}'/>\n", CW + 0.4, CH + 0.4)),
+                    "▀" => Some(format!("<rect x='{l:.1}' y='{t:.1}' width='{:.1}' height='{:.1}' fill='{f}'/>\n", CW + 0.4, CH / 2.0 + 0.3)),
+                    "▄" => Some(format!("<rect x='{l:.1}' y='{mid:.1}' width='{:.1}' height='{:.1}' fill='{f}'/>\n", CW + 0.4, CH / 2.0 + 0.4)),
+                    "▌" => Some(format!("<rect x='{l:.1}' y='{t:.1}' width='{:.1}' height='{CH}' fill='{f}'/>\n", CW * 0.4)),
+                    "─" => Some(line(format!("M{l:.1} {mid:.1}H{r:.1}"))),
+                    "│" => Some(line(format!("M{m:.1} {t:.1}V{b:.1}"))),
+                    "╭" => Some(line(format!("M{r:.1} {mid:.1}Q{m:.1} {mid:.1} {m:.1} {b:.1}"))),
+                    "╮" => Some(line(format!("M{l:.1} {mid:.1}Q{m:.1} {mid:.1} {m:.1} {b:.1}"))),
+                    "╰" => Some(line(format!("M{m:.1} {t:.1}Q{m:.1} {mid:.1} {r:.1} {mid:.1}"))),
+                    "╯" => Some(line(format!("M{m:.1} {t:.1}Q{m:.1} {mid:.1} {l:.1} {mid:.1}"))),
+                    "├" => Some(line(format!("M{m:.1} {t:.1}V{b:.1}M{m:.1} {mid:.1}H{r:.1}"))),
+                    "└" => Some(line(format!("M{m:.1} {t:.1}V{mid:.1}H{r:.1}"))),
+                    _ => None,
+                };
+                let bold = c.modifier.contains(ratatui::style::Modifier::BOLD);
+                match shape {
+                    Some(s) => {
+                        flush(&mut run, &mut o);
+                        o += &s;
+                    }
+                    None => {
+                        let same = matches!(&run, Some((rf, rb, _, _)) if *rf == f && *rb == bold);
+                        if !same {
+                            flush(&mut run, &mut o);
+                            run = Some((f.clone(), bold, vec![], String::new()));
+                        }
+                        let rr = run.as_mut().unwrap();
+                        for ch in sym.chars() {
+                            rr.2.push(l);
+                            rr.3.push(ch);
+                        }
+                    }
+                }
+            }
+            flush(&mut run, &mut o);
+        }
+        o += "</g>\n</svg>\n";
+        o
+    }
+
+    fn shot(light: bool, view: View, sel: isize, w: u16, h: u16, file: &str) {
+        // the demo's made-up home, so paths show as ~/code/…
+        unsafe { std::env::set_var("HOME", "/Users/you") };
+        ui::set_light(light);
+        let dir = PathBuf::from("/nonexistent");
+        let mut app = App::new_demo(Scanner::new(dir, 0));
+        // creating the app applies the saved theme; the screenshot's theme wins
+        app.settings.light = light;
+        ui::set_light(light);
+        app.settings.notify = true;
+        app.show_recent = true;
+        app.rebuild_rows();
+        if view == View::Terminals {
+            app.set_view(View::Terminals);
+        }
+        app.move_sel(sel);
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let p = ui::pal();
+        let (bg, fg) = (hex(p.bg.unwrap_or(Color::Rgb(26, 27, 38)), "#1a1b26"), hex(p.fg, "#c0caf5"));
+        let chrome = if light { "#e9ebf2" } else { "#15161f" };
+        std::fs::create_dir_all("docs").unwrap();
+        std::fs::write(format!("docs/{file}"), svg(t.backend().buffer(), &bg, &fg, "whosup", chrome)).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn screenshots() {
+        shot(false, View::Sessions, 1, 150, 27, "whosup-dark.svg");
+        shot(true, View::Sessions, 7, 150, 27, "whosup-light.svg");
+        shot(false, View::Terminals, 1, 150, 22, "whosup-terminals.svg");
     }
 }
